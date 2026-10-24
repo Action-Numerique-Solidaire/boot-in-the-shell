@@ -1,0 +1,19 @@
+# Adressage au démarrage du live : sans ce fichier, /etc/netplan est vide dans
+# l'image (live-config ne configure PAS le réseau) et l'assistant s'arrête sur
+# « Impossible de détecter une interface réseau active ».
+# Toutes les interfaces filaires en DHCP, optional: true pour ne pas retarder
+# le boot si un port est débranché.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    bits-ethernet:
+      match:
+        name: "en*"
+      dhcp4: true
+      optional: true
+    bits-ethernet-legacy:
+      match:
+        name: "eth*"
+      dhcp4: true
+      optional: true

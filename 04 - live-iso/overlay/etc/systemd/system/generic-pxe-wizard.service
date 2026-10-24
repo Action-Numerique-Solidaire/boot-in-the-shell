@@ -1,0 +1,18 @@
+[Unit]
+Description=Assistant de configuration et démarrage du serveur PXE
+After=network-online.target local-fs.target
+Wants=network-online.target
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/generic-pxe-wizard.sh
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+
+[Install]
+WantedBy=multi-user.target
