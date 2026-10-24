@@ -130,6 +130,12 @@ while IFS= read -r -d '' rel; do
   chown root:root "$CHROOT/$rel"
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
 chmod +x "$CHROOT/usr/local/sbin/generic-pxe-wizard.sh"
+# Les .gitkeep ne servent qu'à faire exister dans git les répertoires vides de
+# l'overlay (etc/network, requis par live-boot) : ils n'ont rien à faire dans
+# l'image.
+while IFS= read -r -d '' rel; do
+  rm -f "$CHROOT/$rel"
+done < <(cd "$OVERLAY_SRC" && find . -name .gitkeep -printf '%P\0')
 install -d -m 0755 "$CHROOT/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/generic-pxe-wizard.service \
   "$CHROOT/etc/systemd/system/multi-user.target.wants/generic-pxe-wizard.service"

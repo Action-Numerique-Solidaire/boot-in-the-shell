@@ -1,0 +1,4 @@
+Ce répertoire doit exister (vide) dans l'image : sans lui, live-boot échoue
+sur « /init: can't create /root/etc/network/interfaces: nonexistent directory ».
+Git ne versionnant pas les répertoires vides, ce fichier le matérialise ;
+build-iso.sh le retire de l'image après la copie de l'overlay.
