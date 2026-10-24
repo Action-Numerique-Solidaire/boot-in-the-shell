@@ -1,0 +1,70 @@
+name: Vérification des scripts
+
+# Contrôles rapides (quelques secondes) à chaque poussée, pour ne pas découvrir
+# une faute de frappe après 40 min de build. Le 17/10, un build a été perdu
+# parce que build-iso.sh n'avait pas son bit exécutable : c'est vérifié ici.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verifier:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntaxe bash de tous les scripts
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            if bash -n "$f"; then
+              echo "ok      $f"
+            else
+              echo "::error file=$f::erreur de syntaxe bash"
+              fail=1
+            fi
+          done < <(find . -path ./build -prune -o -name '*.sh' -print0)
+          exit $fail
+
+      - name: Bit exécutable sur les scripts lancés directement
+        run: |
+          fail=0
+          for f in "04 - live-iso/build-iso.sh" \
+                   "03 - prototype-generic/scripts/install.sh" \
+                   "04 - live-iso/overlay/usr/local/sbin/generic-pxe-wizard.sh"; do
+            if [ ! -x "$f" ]; then
+              echo "::error file=$f::bit exécutable manquant (chmod +x)"
+              fail=1
+            else
+              echo "ok      $f"
+            fi
+          done
+          for f in "03 - prototype-generic/scripts/"*.sh; do
+            [ -x "$f" ] || { echo "::error file=$f::bit exécutable manquant"; fail=1; }
+          done
+          exit $fail
+
+      - name: Intégrité du prototype générique (MANIFEST.sha256)
+        working-directory: "03 - prototype-generic"
+        run: sha256sum -c MANIFEST.sha256
+
+      - name: Cohérence du contrat assistant / install.sh
+        run: |
+          # L'assistant appelle install.sh avec ces deux modes : s'ils
+          # disparaissent de install.sh, le live casse silencieusement.
+          for mode in --prepare-data-disk --reuse-data-disk; do
+            grep -q -- "$mode" "03 - prototype-generic/scripts/install.sh" \
+              || { echo "::error::mode $mode absent de install.sh"; exit 1; }
+            echo "ok      $mode"
+          done
+
+      - name: shellcheck (informatif)
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find . -path ./build -prune -o -name '*.sh' -print0 \
+            | xargs -0 shellcheck -S warning || true
