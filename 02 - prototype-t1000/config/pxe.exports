@@ -1,0 +1,9 @@
+/mnt/lubuntu-26.04 192.168.0.0/24(ro,sync,no_subtree_check)
+/mnt/zorin-18.1 192.168.0.0/24(ro,sync,no_subtree_check)
+/mnt/lubuntu-26.04-killbit 192.168.0.0/24(ro,sync,no_subtree_check)
+/mnt/ubuntu-server-26.04 192.168.0.0/24(ro,sync,no_subtree_check)
+/srv/pxe/lubuntu-26.04-killbit 192.168.0.0/24(ro,sync,no_subtree_check)
+
+# BEGIN BITS CLONEZILLA IMAGES
+/srv/pxe-data/clonezilla-images 192.168.0.0/24(rw,sync,no_subtree_check,all_squash,anonuid=65534,anongid=65534)
+# END BITS CLONEZILLA IMAGES

@@ -1,0 +1,16 @@
+# Format séparé par le caractère | :
+# enabled|id|type|filename|url|sha256|libellé du menu
+#
+# Types pris en charge :
+#   casper-iso    Ubuntu, Lubuntu, Zorin et médias dérivés de Casper
+#   clonezilla-zip
+#   windows-iso
+#
+# Remplacer REPLACE_URL et REPLACE_SHA256 avant d'activer une ligne.
+
+yes|ubuntu-server|casper-iso|ubuntu-26.04-live-server-amd64.iso|https://releases.ubuntu.com/26.04/ubuntu-26.04-live-server-amd64.iso|dec49008a71f6098d0bcfc822021f4d042d5f2db279e4d75bdd981304f1ca5d9|Ubuntu Server 26.04 LTS - installation
+yes|lubuntu|casper-iso|lubuntu-26.04-desktop-amd64.iso|https://cdimage.ubuntu.com/lubuntu/releases/26.04/release/lubuntu-26.04-desktop-amd64.iso|a9eef9e75c139caa428d11799f681e2d29e6ba7e22aa045d9a64599d45cd12ff|Lubuntu 26.04 Live
+no|zorin|casper-iso|Zorin-OS-18.1-Core-64-bit.iso|REPLACE_URL|44649b97bd307fc4c8529205d098ebbf98575a1e1ba2ee7d7005b697af1721d5|Zorin OS 18.1 Core
+no|killbit|casper-iso|lubuntu-26.04-killbit-amd64.iso|REPLACE_URL|REPLACE_SHA256|Lubuntu Killbit
+yes|clonezilla|clonezilla-zip|clonezilla-live-3.3.3-37-amd64.zip|https://downloads.sourceforge.net/project/clonezilla/clonezilla_live_stable/3.3.3-37/clonezilla-live-3.3.3-37-amd64.zip|bbb02b409708cf37774debe00f96c642c59c48ebb216f7349dc2252f705ff10e|Clonezilla Live 3.3.3-37
+no|windows11|windows-iso|Win11.iso|REPLACE_URL|REPLACE_SHA256|Windows 11 - installation

@@ -1,0 +1,11 @@
+# Artefacts de build (chroot, staging, ISO) — plusieurs Go, jamais versionnés
+build/
+*.iso
+*.iso.sha256
+
+# Sauvegardes locales d'avant modification : l'historique git les remplace
+*.bak
+*.bak-*
+
+# Outillage de session
+.claude/

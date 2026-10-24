@@ -1,0 +1,15 @@
+38635fcd4ea703ece03fcdeeb1a56cdfe175f1c2f64ba0f7a743ea874d5d0352  ./config/media.conf.example
+fe5a6c60caaacdf63ddd5b294a135d054d02efde618b03d43337cf70873f01f2  ./config/pxe.env.example
+e6662a5e36fc41373c227aa331b2643b22691ed86cb71b02d47f40a003dabf6b  ./PLAYBOOK.md
+d411bfee417caffcd92e8e671f77e90978b71f5ea5c337652e8c746d412fd13e  ./README.md
+2f92bd65dbb8c732db8e81a13424ab6604e315f13790b4b3a4376ed5db2a17ce  ./scripts/00-validate-config.sh
+af5532c3380397d6b61791f543b2b5ac178ca1ad8b9d1dd9cd2fd82fdf2a0451  ./scripts/10-install-prerequisites.sh
+e448120793618d325dba7f5f1f878f9a81f097e1869897486423d3286e44eeca  ./scripts/20-prepare-data-disk.sh
+4f640da21e70c6b49ed25557f3e5f717b6430ab01adf9680b44e7bea1303ab73  ./scripts/30-configure-network.sh
+41746f2ba6fc2f72259a2b806665fc190abf42571693b984d1484bf0c9a082e8  ./scripts/40-download-media.sh
+ffd8a9294d88184c82888e6e7c16630b104579c511c4df12864d1588be9148bd  ./scripts/50-build-ipxe.sh
+03079657a0e8815ed7ac1f711434fcdb03c14a3f8ccb2618fdd5eef18c8c67f8  ./scripts/60-publish-media.sh
+8ab41d03f44dd836283472104c4d6eb21446423db68831bd24366b316a02be89  ./scripts/70-enable-and-validate.sh
+b19b1fe5e11d482b121449487998c2c1c6646059d4ce2bae01e770eccd29b658  ./scripts/80-enable-boot-sync.sh
+d7c6e97a30f904317c525908f36fd1dcf48146d0c3e6d14bec02285ba89d7275  ./scripts/install.sh
+7b38f3eb5f98914c96d7612949f256f5372d0320cba6bda81648b216be592963  ./scripts/lib/common.sh

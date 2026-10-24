@@ -1,0 +1,68 @@
+#!ipxe
+
+dhcp
+
+:menu
+menu Serveur PXE T1000
+item --gap -- ---------------- Systemes disponibles ----------------
+item lubuntu Lubuntu 26.04
+item lubuntu_killbit Lubuntu 26.04 Killbit
+item zorin Zorin OS 18.1 Core
+item ubuntu_server Ubuntu Server 26.04 LTS - installation
+item windows11 Windows 11 25H2 - installation
+item --gap -- ---------------- Outils iPXE ----------------
+item clonezilla Clonezilla Live 3.3.3-37 - interactif
+item shell Ouvrir la console iPXE
+item reboot Redemarrer l'ordinateur
+item exit Quitter iPXE
+choose target && goto ${target}
+
+:lubuntu
+kernel http://192.168.0.102/pxe/lubuntu-26.04/vmlinuz initrd=initrd boot=casper netboot=nfs nfsroot=192.168.0.102:/mnt/lubuntu-26.04 ip=dhcp
+initrd http://192.168.0.102/pxe/lubuntu-26.04/initrd
+boot || goto failed
+
+:lubuntu_killbit
+kernel http://192.168.0.102/pxe/lubuntu-26.04-killbit/vmlinuz initrd=initrd boot=casper netboot=nfs nfsroot=192.168.0.102:/srv/pxe/lubuntu-26.04-killbit ip=dhcp locale=fr_FR.UTF-8 keyboard-layouts=fr
+initrd http://192.168.0.102/pxe/lubuntu-26.04-killbit/initrd
+boot || goto failed
+
+:zorin
+kernel http://192.168.0.102/pxe/zorin-18.1/vmlinuz initrd=initrd.zstd boot=casper netboot=nfs nfsroot=192.168.0.102:/mnt/zorin-18.1 ip=dhcp
+initrd http://192.168.0.102/pxe/zorin-18.1/initrd.zstd
+boot || goto failed
+
+:ubuntu_server
+kernel http://192.168.0.102/pxe/ubuntu-server-26.04/vmlinuz initrd=initrd boot=casper netboot=nfs nfsroot=192.168.0.102:/mnt/ubuntu-server-26.04 ip=dhcp ---
+initrd http://192.168.0.102/pxe/ubuntu-server-26.04/initrd
+boot || goto failed
+
+:windows11
+kernel http://192.168.0.102/pxe/windows11/wimboot quiet
+initrd http://192.168.0.102/pxe/windows11/media/boot/bcd BCD
+initrd http://192.168.0.102/pxe/windows11/media/boot/boot.sdi boot.sdi
+initrd http://192.168.0.102/pxe/windows11/media/sources/boot.wim boot.wim
+initrd http://192.168.0.102/pxe/windows11/winpeshl.ini winpeshl.ini
+initrd http://192.168.0.102/pxe/windows11/install.bat install.bat
+boot || goto failed
+
+:clonezilla
+kernel http://192.168.0.102/pxe/clonezilla-3.3.3-37/vmlinuz initrd=initrd.img boot=live username=user union=overlay config components quiet noswap edd=on nomodeset locales=fr_FR.UTF-8 keyboard-layouts=fr ocs_prerun="mount -t nfs -o vers=3 192.168.0.102:/srv/pxe-data/clonezilla-images /home/partimag" ocs_live_run=ocs-live-general ocs_live_extra_param= ocs_live_batch=no net.ifnames=0 nosplash noprompt fetch=http://192.168.0.102/pxe/clonezilla-3.3.3-37/filesystem.squashfs
+initrd http://192.168.0.102/pxe/clonezilla-3.3.3-37/initrd.img
+boot || goto failed
+
+:shell
+shell
+goto menu
+
+:failed
+echo
+echo Echec du demarrage du systeme selectionne
+prompt Appuyer sur une touche pour revenir au menu
+goto menu
+
+:reboot
+reboot
+
+:exit
+exit
