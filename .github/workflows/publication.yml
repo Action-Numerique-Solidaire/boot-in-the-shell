@@ -88,14 +88,14 @@ jobs:
 
       # --- ISO live : la partie longue --------------------------------------
       - name: Libérer de l'espace disque
-        if: ${{ inputs.construire_iso != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
       - name: Dépendances de l'hôte
-        if: ${{ inputs.construire_iso != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -104,7 +104,7 @@ jobs:
           # installe dans le chroot et en extrait isohdpfx.bin.
 
       - name: Construire l'ISO
-        if: ${{ inputs.construire_iso != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           cd "04 - live-iso"
           sudo env PXE_ISO_WORK="$RUNNER_TEMP/pxe-iso-build" \
@@ -115,7 +115,7 @@ jobs:
       # la rendait inutilisable sur du matériel post-2012 à CSM désactivé. Une
       # régression doit échouer ici, pas sur le premier PC d'un bénévole.
       - name: Vérifier le catalogue El Torito (BIOS + UEFI)
-        if: ${{ inputs.construire_iso != false }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           xorriso -indev "out/$ISO_NAME" -report_el_torito plain 2>&1 | tee eltorito.txt
           imgs=$(grep 'El Torito boot img' eltorito.txt || true)
