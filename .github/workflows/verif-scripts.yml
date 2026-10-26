@@ -34,6 +34,7 @@ jobs:
         run: |
           fail=0
           for f in "04 - live-iso/build-iso.sh" \
+                   "packaging/build-deb.sh" \
                    "03 - prototype-generic/scripts/install.sh" \
                    "04 - live-iso/overlay/usr/local/sbin/generic-pxe-wizard.sh"; do
             if [ ! -x "$f" ]; then
