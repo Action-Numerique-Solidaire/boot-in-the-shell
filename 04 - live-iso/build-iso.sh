@@ -20,6 +20,21 @@ MIRROR="http://archive.ubuntu.com/ubuntu"
 OUTPUT_ISO="${1:-$WORK_ROOT/boot-in-the-shell-live.iso}"
 VOLID="BITS-LIVE"
 
+# Compression du squashfs. Mesuré sur cette image (1,6 Go de paquets, 8 cœurs) :
+#
+#   xz          131,9 s   1060 Mo    <- ancien défaut
+#   zstd -3      23,4 s
+#   zstd -8      29,2 s
+#
+# zstd décompresse par ailleurs bien plus vite que xz, et c'est ce que paie
+# CHAQUE démarrage de l'image, pas seulement la construction. Ubuntu est passé
+# à zstd pour ses propres images live pour cette raison.
+#
+# Attention : zstd au niveau 19 est un piège, mesuré à 217 s pour une image
+# PLUS grosse que xz. Ne pas « monter le niveau pour gagner de la place ».
+SQUASH_COMP="${PXE_ISO_SQUASH_COMP:-zstd}"
+SQUASH_LEVEL="${PXE_ISO_SQUASH_LEVEL:-8}"
+
 PACKAGES=(
   openssh-server curl ca-certificates gnupg git
   build-essential liblzma-dev
@@ -56,6 +71,14 @@ bind_mount() {
   local target="$1"
   shift
   mount "$@" "$target"
+  # Détacher la propagation du montage. Sans cela, / étant monté en « shared »
+  # sur une Ubuntu de bureau, un démontage côté chroot se propage à l'hôte :
+  # une construction interrompue a ainsi cassé le /dev/pts de la machine, qui a
+  # dû être redémarrée. En rslave, le chroot reçoit les changements de l'hôte
+  # mais ne lui en renvoie aucun.
+  mount --make-rslave "$target" 2>/dev/null \
+    || mount --make-slave "$target" 2>/dev/null \
+    || echo "AVERTISSEMENT : propagation non détachée pour $target" >&2
   mounted+=("$target")
 }
 
@@ -129,7 +152,8 @@ cp -a "$OVERLAY_SRC/." "$CHROOT/"
 while IFS= read -r -d '' rel; do
   chown root:root "$CHROOT/$rel"
 done < <(cd "$OVERLAY_SRC" && find . -mindepth 1 -printf '%P\0')
-chmod +x "$CHROOT/usr/local/sbin/generic-pxe-wizard.sh"
+chmod +x "$CHROOT/usr/local/sbin/generic-pxe-wizard.sh" \
+  "$CHROOT/usr/local/sbin/bits-live-ready.sh"
 # Les .gitkeep ne servent qu'à faire exister dans git les répertoires vides de
 # l'overlay (etc/network, requis par live-boot) : ils n'ont rien à faire dans
 # l'image.
@@ -139,6 +163,8 @@ done < <(cd "$OVERLAY_SRC" && find . -name .gitkeep -printf '%P\0')
 install -d -m 0755 "$CHROOT/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/generic-pxe-wizard.service \
   "$CHROOT/etc/systemd/system/multi-user.target.wants/generic-pxe-wizard.service"
+ln -sf /etc/systemd/system/bits-live-ready.service \
+  "$CHROOT/etc/systemd/system/multi-user.target.wants/bits-live-ready.service"
 
 # live-config ne configure pas le réseau (aucun composant DHCP dans
 # /lib/live/config) et /etc/netplan est vide dans un chroot debootstrap : sans
@@ -148,15 +174,46 @@ ln -sf /etc/systemd/system/generic-pxe-wizard.service \
 log "Activation de systemd-networkd et systemd-resolved"
 in_chroot systemctl enable systemd-networkd.service systemd-resolved.service
 
+# Les services PXE sont installés dans l'image pour que l'assistant n'ait rien à
+# télécharger, mais leurs paquets les activent au passage. Ils démarraient donc
+# à CHAQUE amorçage live, sans configuration, et échouaient : la console
+# affichait « Failed to start dnsmasq.service », le système finissait en état
+# degraded, et nfs-server comme samba allongeaient le démarrage pour rien.
+#
+# C'est déjà l'intention du pipeline — 10-install-prerequisites.sh les désactive
+# — mais il ne s'exécute qu'à l'installation, donc après l'amorçage.
+# 70-enable-and-validate.sh réactive exactement ceux dont il a besoin.
+log "Désactivation des services PXE jusqu'à leur configuration"
+in_chroot systemctl disable dnsmasq.service nginx.service nfs-server.service \
+  smbd.service nmbd.service samba-ad-dc.service
+
 echo "pxe-live" > "$CHROOT/etc/hostname"
 
 # --- 4bis. Chargeur UEFI (GRUB) ------------------------------------------------
 # Construit DANS le chroot : l'hôte n'a besoin que de xorriso. Le .EFI embarque
 # un grub.cfg minimal qui retrouve l'ISO par son label et charge le vrai menu.
 log "Construction du chargeur UEFI (GRUB x86_64-efi)"
+# Les modules de GRUB vivent dans le memdisk de l'image autonome et sont
+# retrouvés via $prefix. Écraser $prefix pour le faire pointer sur l'ISO faisait
+# chercher les modules sur l'ISO, qui n'en contient aucun : « configfile »
+# n'étant pas déjà chargé, l'amorçage UEFI s'arrêtait sur l'invite grub> avec
+# « /boot/grub/x86_64-efi/configfile.mod not found ». Le contrôle El Torito ne
+# voyait rien, l'entrée UEFI étant bien présente.
+#
+# On charge donc explicitement ce dont on a besoin TANT QUE $prefix désigne
+# encore le memdisk, et on ne touche qu'à $root, qui sert à résoudre les
+# chemins de fichiers.
 cat > "$CHROOT/tmp/grub-embed.cfg" <<EOF
+insmod part_gpt
+insmod part_msdos
+insmod fat
+insmod iso9660
+insmod search
+insmod configfile
+insmod linux
+insmod normal
+insmod all_video
 search --no-floppy --set=root --label $VOLID
-set prefix=(\$root)/boot/grub
 configfile /boot/grub/grub.cfg
 EOF
 
@@ -199,10 +256,12 @@ install -m 0644 "$kernel" "$ISO_STAGE/live/vmlinuz"
 install -m 0644 "$initrd" "$ISO_STAGE/live/initrd.img"
 
 # --- 7. Squashfs ---------------------------------------------------------------
-log "Construction de filesystem.squashfs (peut prendre plusieurs minutes)"
+log "Construction de filesystem.squashfs ($SQUASH_COMP niveau $SQUASH_LEVEL)"
 rm -f "$ISO_STAGE/live/filesystem.squashfs"
+squash_args=(-comp "$SQUASH_COMP" -noappend -wildcards)
+[[ "$SQUASH_COMP" == zstd ]] && squash_args+=(-Xcompression-level "$SQUASH_LEVEL")
 mksquashfs "$CHROOT" "$ISO_STAGE/live/filesystem.squashfs" \
-  -comp xz -noappend -wildcards \
+  "${squash_args[@]}" \
   -e "boot/vmlinuz-*" -e "boot/initrd.img-*"
 
 # --- 8. isolinux -----------------------------------------------------------------
@@ -218,7 +277,7 @@ TIMEOUT 50
 LABEL live
   MENU LABEL Boot in the Shell -- serveur PXE
   KERNEL /live/vmlinuz
-  APPEND initrd=/live/initrd.img boot=live components quiet
+  APPEND initrd=/live/initrd.img boot=live components quiet console=tty0 console=ttyS0,115200
 EOF
 
 # --- 8bis. Menu GRUB (UEFI) ----------------------------------------------------
@@ -229,7 +288,7 @@ set default=0
 set timeout=5
 
 menuentry "Boot in the Shell -- serveur PXE" {
-    linux /live/vmlinuz boot=live components quiet
+    linux /live/vmlinuz boot=live components quiet console=tty0 console=ttyS0,115200
     initrd /live/initrd.img
 }
 EOF

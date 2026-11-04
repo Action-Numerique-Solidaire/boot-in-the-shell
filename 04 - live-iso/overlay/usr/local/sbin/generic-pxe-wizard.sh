@@ -6,9 +6,62 @@ STATE_LABEL=PXE_DATA
 DATA_MOUNT=/srv/pxe-data
 CONFIG_SUBDIR=boot-config
 
-die() { whiptail --title "Serveur PXE — erreur" --msgbox "$*" 12 70 || true; echo "ERREUR : $*" >&2; exit 1; }
+# --- 0. Mode non interactif piloté par la ligne de commande du noyau ----------
+# Sans ce mode, l'assistant s'arrête au premier whiptail : aucun test
+# automatisé ne peut aller au-delà, et un déploiement en série demande un
+# opérateur devant chaque écran. Les paramètres sont lus sur /proc/cmdline
+# parce que c'est le seul canal disponible avant tout système de fichiers
+# inscriptible, et qu'il fonctionne aussi bien en PXE qu'en démarrage USB.
+#
+#   bits.auto                 active le mode non interactif
+#   bits.data-disk=<chemin>   disque de données, OBLIGATOIRE en mode auto
+#   bits.hostname=<nom>       nom du serveur
+#   bits.iface=<ifname>       interface qui servira le PXE (si la machine en a plusieurs)
+#   bits.gateway=<ip>         passerelle déclarée dans pxe.env
+#   bits.dns=<ip>             DNS déclaré dans pxe.env
+#   bits.media=none|<chemin>  catalogue de médias ; « none » n'en active aucun
+AUTO=0
+AUTO_DATA_DISK=""
+AUTO_HOSTNAME=""
+AUTO_IFACE=""
+AUTO_GATEWAY=""
+AUTO_DNS=""
+AUTO_MEDIA=""
+for arg in $(cat /proc/cmdline 2>/dev/null || true); do
+  case "$arg" in
+    bits.auto)          AUTO=1 ;;
+    bits.data-disk=*)   AUTO_DATA_DISK="${arg#*=}" ;;
+    bits.hostname=*)    AUTO_HOSTNAME="${arg#*=}" ;;
+    bits.iface=*)       AUTO_IFACE="${arg#*=}" ;;
+    bits.gateway=*)     AUTO_GATEWAY="${arg#*=}" ;;
+    bits.dns=*)         AUTO_DNS="${arg#*=}" ;;
+    bits.media=*)       AUTO_MEDIA="${arg#*=}" ;;
+  esac
+done
+
+# En mode auto, tout part sur /dev/console : avec console=ttyS0 c'est la ligne
+# série, donc la seule chose qu'un test puisse lire. L'unité systemd écrit
+# sinon sur /dev/tty1, invisible d'une VM sans écran.
+if [[ $AUTO -eq 1 ]]; then
+  exec >/dev/console 2>&1
+fi
+
+# Un échec doit être annoncé. Sans marqueur d'échec, un test ne distingue pas
+# une panne d'une installation lente et attend son délai entier pour rien.
+fail() {
+  if [[ $AUTO -eq 1 ]]; then
+    echo "BITS-PXE-FAILED $*"
+  else
+    whiptail --title "Serveur PXE — erreur" --msgbox "$*" 12 70 || true
+  fi
+  echo "ERREUR : $*" >&2
+  exit 1
+}
+die() { fail "$@"; }
+trap 'fail "interruption inattendue (ligne $LINENO)"' ERR
 
 echo "== Assistant de démarrage du serveur PXE =="
+[[ $AUTO -eq 1 ]] && echo "mode non interactif (bits.auto)"
 
 # --- 1. Identifier le disque de données local (hors média de démarrage live) ---
 live_source="$(findmnt -rn -o SOURCE /run/live/medium 2>/dev/null || findmnt -rn -o SOURCE /lib/live/mount/medium 2>/dev/null || true)"
@@ -18,21 +71,31 @@ if [[ -n "$live_source" ]]; then
   [[ -n "$live_parent" ]] && live_disk="/dev/$live_parent"
 fi
 
-data_disk=""
-preferred_disk=""
-while read -r name type; do
-  [[ "$type" == "disk" ]] || continue
-  dev="/dev/$name"
-  [[ "$dev" == "$live_disk" ]] && continue
-  [[ -z "$data_disk" ]] && data_disk="$dev"
-  part_name="$(lsblk -rno NAME "$dev" | sed -n '2p')"
-  if [[ -n "$part_name" ]] && [[ "$(lsblk -no LABEL "/dev/$part_name" 2>/dev/null || true)" == "$STATE_LABEL" ]]; then
-    preferred_disk="$dev"
-  fi
-done < <(lsblk -dn -o NAME,TYPE)
+if [[ $AUTO -eq 1 ]]; then
+  # Le mode auto ne devine JAMAIS quel disque effacer : --prepare-data-disk
+  # efface entièrement sa cible, et un démarrage automatique sur une machine
+  # garnie ne doit pas pouvoir détruire des données par défaut.
+  [[ -n "$AUTO_DATA_DISK" ]] || fail "bits.auto exige bits.data-disk=<chemin> : le mode auto ne choisit pas seul le disque à effacer."
+  data_disk="$(readlink -f "$AUTO_DATA_DISK" 2>/dev/null || true)"
+  [[ -b "$data_disk" ]] || fail "bits.data-disk=$AUTO_DATA_DISK ne désigne pas un périphérique bloc."
+  [[ "$data_disk" != "$live_disk" ]] || fail "bits.data-disk désigne le média de démarrage ($live_disk)."
+else
+  data_disk=""
+  preferred_disk=""
+  while read -r name type; do
+    [[ "$type" == "disk" ]] || continue
+    dev="/dev/$name"
+    [[ "$dev" == "$live_disk" ]] && continue
+    [[ -z "$data_disk" ]] && data_disk="$dev"
+    part_name="$(lsblk -rno NAME "$dev" | sed -n '2p')"
+    if [[ -n "$part_name" ]] && [[ "$(lsblk -no LABEL "/dev/$part_name" 2>/dev/null || true)" == "$STATE_LABEL" ]]; then
+      preferred_disk="$dev"
+    fi
+  done < <(lsblk -dn -o NAME,TYPE)
 
-[[ -n "$preferred_disk" ]] && data_disk="$preferred_disk"
-[[ -n "$data_disk" ]] || die "Aucun disque local utilisable trouvé (en dehors du média de démarrage)."
+  [[ -n "$preferred_disk" ]] && data_disk="$preferred_disk"
+  [[ -n "$data_disk" ]] || die "Aucun disque local utilisable trouvé (en dehors du média de démarrage)."
+fi
 
 data_disk_name="${data_disk##*/}"
 data_disk_by_id="$(find /dev/disk/by-id -maxdepth 1 -lname "*/${data_disk_name}" 2>/dev/null | sort | head -n1 || true)"
@@ -60,17 +123,27 @@ fi
 
 # --- 2. Construire la proposition de configuration (persistée ou par défaut) ---
 if [[ $persisted -eq 1 ]]; then
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1090,SC1091
   source "$config_dir/pxe.env"
 else
-  iface="$(ip -o -4 route show to default | awk '{print $5; exit}')"
-  [[ -n "$iface" ]] || iface="$(ip -o link show up | awk -F': ' '$2 != "lo" {print $2; exit}')"
+  if [[ -n "$AUTO_IFACE" ]]; then
+    iface="$AUTO_IFACE"
+    ip link show "$iface" >/dev/null 2>&1 || fail "bits.iface=$iface : interface inconnue."
+  else
+    iface="$(ip -o -4 route show to default | awk '{print $5; exit}')"
+    [[ -n "$iface" ]] || iface="$(ip -o link show up | awk -F': ' '$2 != "lo" {print $2; exit}')"
+  fi
   [[ -n "$iface" ]] || die "Impossible de détecter une interface réseau active."
   cidr="$(ip -4 -o addr show dev "$iface" scope global | awk '{print $4; exit}')"
   [[ -n "$cidr" ]] || die "Interface $iface sans adresse IPv4. Branche le câble réseau puis relance."
   gw="$(ip -o -4 route show to default dev "$iface" | awk '{print $3; exit}')"
+  # Repli : une interface dédiée au PXE peut ne pas porter la route par défaut.
+  [[ -n "$gw" ]] || gw="$(ip -o -4 route show to default | awk '{print $3; exit}')"
+  [[ -n "$AUTO_GATEWAY" ]] && gw="$AUTO_GATEWAY"
+  [[ -n "$gw" ]] || die "Aucune passerelle trouvée pour $iface. Préciser bits.gateway=<ip>."
   dns="$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
   [[ -n "$dns" ]] || dns="$gw"
+  [[ -n "$AUTO_DNS" ]] && dns="$AUTO_DNS"
   subnet="$(python3 - "$cidr" <<'PY'
 import ipaddress, sys
 print(ipaddress.ip_interface(sys.argv[1]).network)
@@ -83,6 +156,7 @@ PY
   PXE_DNS="$dns"
   PXE_SUBNET_CIDR="$subnet"
 fi
+[[ -n "$AUTO_HOSTNAME" ]] && PXE_HOSTNAME="$AUTO_HOSTNAME"
 
 PXE_DATA_DISK="$data_disk_by_id"
 PXE_DATA_PARTITION="${data_disk_by_id}-part1"
@@ -109,7 +183,10 @@ Sous-réseau PXE   : $PXE_SUBNET_CIDR
 Disque de données : $data_disk $([[ $prepare_needed -eq 1 ]] && echo '(sera effacé et préparé)' || echo '(déjà préparé, conservé)')
 Source            : $([[ $persisted -eq 1 ]] && echo 'configuration précédente retrouvée sur le disque' || echo 'valeurs détectées automatiquement (DHCP)')"
 
-if whiptail --title "Serveur PXE — configuration par défaut" --yesno "$summary
+if [[ $AUTO -eq 1 ]]; then
+  echo "$summary"
+  use_defaults=1
+elif whiptail --title "Serveur PXE — configuration par défaut" --yesno "$summary
 
 Utiliser cette configuration ?" 20 76; then
   use_defaults=1
@@ -153,7 +230,16 @@ IPXE_GIT_URL=$IPXE_GIT_URL
 IPXE_GIT_COMMIT=$IPXE_GIT_COMMIT
 EOF
 
-if [[ $persisted -eq 1 && -f "$config_dir/media.conf" ]]; then
+if [[ "$AUTO_MEDIA" == "none" ]]; then
+  # Catalogue sans aucune ligne active : le serveur s'installe et se valide
+  # sans télécharger les 6 à 8 Go de médias du catalogue d'exemple. Utile pour
+  # un test, et pour déployer un serveur dont les médias seront ajoutés après.
+  printf '# Catalogue vide (bits.media=none) : aucun média activé.\n' \
+    > "$PROTO_ROOT/config/media.conf"
+elif [[ -n "$AUTO_MEDIA" ]]; then
+  [[ -f "$AUTO_MEDIA" ]] || fail "bits.media=$AUTO_MEDIA : fichier introuvable."
+  cp -a "$AUTO_MEDIA" "$PROTO_ROOT/config/media.conf"
+elif [[ $persisted -eq 1 && -f "$config_dir/media.conf" ]]; then
   cp -a "$config_dir/media.conf" "$PROTO_ROOT/config/media.conf"
 else
   cp -a "$PROTO_ROOT/config/media.conf.example" "$PROTO_ROOT/config/media.conf"
@@ -168,6 +254,15 @@ fi
 
 install -d -m 0755 "$config_dir"
 cp -a "$PROTO_ROOT/config/pxe.env" "$PROTO_ROOT/config/media.conf" "$config_dir/"
+
+if [[ $AUTO -eq 1 ]]; then
+  # Marqueur de succès en dernier : un test qui le voit sait que le pipeline
+  # entier est passé, services activés et contrôles de l'étape 70 compris.
+  trap - ERR
+  echo "Serveur PXE prêt sur $PXE_ADDRESS_CIDR."
+  echo "BITS-PXE-READY $PXE_ADDRESS_CIDR"
+  exit 0
+fi
 
 whiptail --title "Serveur PXE" --msgbox "Serveur PXE actif sur $PXE_ADDRESS_CIDR.
 

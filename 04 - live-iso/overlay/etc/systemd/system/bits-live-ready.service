@@ -1,0 +1,21 @@
+[Unit]
+Description=Marqueur « système live prêt » (observabilité des tests)
+After=local-fs.target systemd-networkd-wait-online.service
+Wants=network-online.target
+After=network-online.target
+# Avant l'assistant : celui-ci est un oneshot interactif, multi-user.target
+# n'est donc atteint qu'une fois le serveur PXE installé. Un marqueur ordonné
+# après lui n'attesterait plus du démarrage mais de l'installation complète.
+Before=generic-pxe-wizard.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# journal+console : le marqueur doit partir sur /dev/console, qui est la ligne
+# série quand l'ISO démarre avec console=ttyS0 (cas des tests automatisés).
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/usr/local/sbin/bits-live-ready.sh
+
+[Install]
+WantedBy=multi-user.target

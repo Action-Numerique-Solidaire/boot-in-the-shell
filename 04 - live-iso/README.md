@@ -74,9 +74,35 @@ sudo ./build-iso.sh /chemin/de/sortie.iso
 ```
 
 L'hôte n'a besoin que de `debootstrap`, `squashfs-tools` et `xorriso` : le
-chargeur UEFI est construit dans le chroot. Comptez ~13 min à froid, ~90 s si
-le chroot de `/srv/pxe-iso-build` est réutilisé. `PXE_ISO_WORK` permet de
-déplacer le répertoire de travail.
+chargeur UEFI est construit dans le chroot. `PXE_ISO_WORK` permet de déplacer
+le répertoire de travail, et le chroot qui s'y trouve est **réutilisé** d'une
+construction à l'autre — c'est ce qui fait la différence entre une première
+construction et les suivantes.
+
+| Variable | Rôle |
+|---|---|
+| `PXE_ISO_WORK` | répertoire de travail (défaut `/srv/pxe-iso-build`) |
+| `PXE_ISO_SQUASH_COMP` | compresseur du squashfs (défaut `zstd`) |
+| `PXE_ISO_SQUASH_LEVEL` | niveau zstd (défaut `8`) |
+
+Le squashfs est en **zstd**, pas en xz. Mesuré sur cette image, 1,6 Go de
+paquets sur 8 cœurs :
+
+| Compresseur | Construction | Taille | Décompression |
+|---|---|---|---|
+| xz | 131,9 s | 1060 Mo | 44 Mo/s |
+| **zstd niveau 8** | **29,2 s** | 1147 Mo | **170 Mo/s** |
+| zstd niveau 15 | 90,1 s | 1115 Mo | — |
+| zstd niveau 19 | 217,1 s | 1112 Mo | — |
+
+87 Mo de plus, mais la construction va 4,5 fois plus vite et la décompression
+3,9 fois — et la décompression, c'est ce que paie **chaque démarrage** de
+l'image, pas seulement la construction. Ubuntu a fait le même choix pour ses
+images live.
+
+Noter le piège : monter le niveau zstd à 19 donne une image **plus grosse** que
+xz pour 217 s de construction. Ce n'est pas un réglage à pousser « pour gagner
+de la place ».
 
 > Ne jamais modifier `build-iso.sh` pendant qu'il s'exécute : bash relit le
 > fichier au fil de l'exécution, et une insertion décale les octets restants.
@@ -96,3 +122,44 @@ déplacer le répertoire de travail.
   authentification**. Acceptable sur un VLAN d'atelier isolé seulement : les
   clones de disque peuvent contenir les données personnelles des anciens
   propriétaires des postes.
+
+## Déployer sans interaction
+
+L'assistant peut se passer d'opérateur, ce qui sert au déploiement en série et
+rend la chaîne testable automatiquement. Les paramètres se donnent sur la ligne
+de commande du noyau :
+
+```
+boot=live components bits.auto bits.data-disk=/dev/disk/by-id/ata-… bits.media=none
+```
+
+| Paramètre | Rôle |
+|---|---|
+| `bits.auto` | aucune question ; journal et marqueurs sur la console |
+| `bits.data-disk=<chemin>` | **obligatoire** avec `bits.auto` |
+| `bits.hostname=<nom>` | nom du serveur |
+| `bits.iface=<ifname>` | interface qui servira le PXE |
+| `bits.gateway=<ip>` / `bits.dns=<ip>` | valeurs déclarées dans `pxe.env` |
+| `bits.media=none` \| `<chemin>` | catalogue de médias ; `none` n'en active aucun |
+
+`bits.auto` **exige** `bits.data-disk` : le mode automatique ne devine jamais
+quel disque effacer. `--prepare-data-disk` efface entièrement sa cible, et un
+démarrage automatique sur une machine garnie ne doit pas pouvoir détruire des
+données par défaut.
+
+Le mode auto ne reconfigure pas le réseau : l'interface doit déjà porter son
+adresse, par DHCP ou par une configuration statique préalable. Il écrit
+`BITS-PXE-READY <ip>` en cas de succès et `BITS-PXE-FAILED <raison>` sinon.
+
+## Vérifier une image
+
+```bash
+tests/run-all.sh /chemin/image.iso        # l'image démarre, en BIOS et en UEFI
+sudo tests/run-all.sh /chemin/image.iso   # ... et la chaîne PXE complète
+```
+
+Voir [tests/README.md](../tests/README.md). L'ISO embarque
+`bits-live-ready.service`, qui annonce `BITS-LIVE-READY` sur la console une fois
+le système live réellement utilisable : c'est ce marqueur que les tests
+attendent, et la console série est activée dans les deux chargeurs pour qu'une
+machine sans écran puisse être observée.
