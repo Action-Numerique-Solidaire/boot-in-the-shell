@@ -13,11 +13,14 @@ tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
 sudo tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
 ```
 
-| Niveau | Ce que ça prouve | Prérequis | Durée avec KVM |
+| Niveau | Ce que ça prouve | Prérequis | Durée mesurée |
 |---|---|---|---|
-| 1. `boot-test.sh … bios` | l'ISO démarre réellement sur un firmware legacy | `qemu-system-x86` | ~1 min |
-| 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | ~1 min |
+| 1. `boot-test.sh … bios` | l'ISO démarre réellement sur un firmware legacy | `qemu-system-x86` | **21 s** avec KVM |
+| 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | **46 s** avec KVM |
 | 3. `e2e-pxe.sh` | le serveur s'installe **seul** et des clients BIOS **et** UEFI démarrent dessus | root, libvirt, réseau sortant | dizaines de minutes |
+
+Sans KVM, les deux premiers niveaux tournent en émulation. Mesuré sur un runner
+GitHub, menés **en parallèle** : 145 s pour les deux.
 
 Un niveau qui ne peut pas tourner est annoncé **IGNORÉ**, jamais réussi. Un test
 sauté qui compte comme vert est exactement le défaut qui a laissé publier une
@@ -105,6 +108,28 @@ BITS_E2E_KEEP=1 sudo tests/e2e-pxe.sh image.iso   # conserver le labo pour inspe
 sudo tests/e2e-pxe.sh --nettoyer                  # le démonter ensuite
 BITS_E2E_SUBNET=192.168.91 sudo tests/e2e-pxe.sh image.iso   # si 192.168.90/24 est pris
 ```
+
+## Ce que coûte la CI
+
+Première exécution du workflow, cache du chroot vide, total 10 min 51 :
+
+| Étape | Durée |
+|---|---|
+| Dépendances de l'hôte (`qemu-system-x86`, `ovmf` et leurs dépendances) | 205 s |
+| Construire l'ISO | 278 s |
+| Amorçage BIOS et UEFI, en parallèle | 145 s |
+| Préparer puis envoyer le cache du chroot | 14 s |
+| Reste (checkout, espace disque, El Torito, récapitulatif) | 1 s |
+
+`apt-get update` ne pèse que 5 s dans les 205 : le reste est le téléchargement
+et le dépaquetage de QEMU et d'OVMF. `squashfs-tools` est déjà présent sur le
+runner.
+
+Pour référence, la construction de l'ISO mesurée en local : **13 min 27 à
+froid**, dont environ 11 min 45 d'apt dans le chroot pour 1017 Mo téléchargés,
+et **102 s à chaud** quand le chroot est réutilisé — 41 s de squashfs, 31 s de
+`xorriso` et d'empreinte, 24 s de régénération de l'initramfs. C'est ce que le
+cache du chroot supprime en CI.
 
 ## Le mode non interactif, hors tests
 
