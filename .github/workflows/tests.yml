@@ -1,0 +1,199 @@
+name: Tests (amorçage réel de l'ISO)
+
+# Construit l'ISO et vérifie qu'elle DÉMARRE, en BIOS puis en UEFI.
+#
+# Le contrôle El Torito de la publication prouve que l'image déclare ses deux
+# modes d'amorçage ; il ne prouve pas qu'elle démarre. L'ISO a par ailleurs été
+# BIOS seul pendant un mois sans que rien ne le signale.
+#
+# Les mêmes scripts tournent à l'identique chez un contributeur :
+#   tests/run-all.sh <image.iso>
+#
+# Ce workflow est optimisé pour la vitesse, contrairement à publication.yml :
+# il réutilise un chroot mis en cache. Une image PUBLIÉE doit être construite
+# de zéro — d'où l'absence de cache dans publication.yml.
+on:
+  push:
+    paths:
+      - '04 - live-iso/**'
+      - '03 - prototype-generic/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - '04 - live-iso/**'
+      - '03 - prototype-generic/**'
+      - 'tests/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+    inputs:
+      sans_cache:
+        description: "Ignorer le chroot en cache (construction de zéro)"
+        type: boolean
+        default: false
+      bout_en_bout:
+        description: "Lancer aussi le test de bout en bout PXE (très lent sans KVM, peut dépasser le délai)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  ISO_NAME: boot-in-the-shell-live.iso
+  # /mnt est le disque temporaire du runner (~70 Go). Y construire évite
+  # l'étape « libérer de l'espace disque », qui coûtait 81 s mesurées.
+  WORK: /mnt/pxe-iso-build
+
+jobs:
+  amorcage:
+    name: Amorçage BIOS et UEFI
+    runs-on: ubuntu-24.04   # doit rester aligné sur DISTRO=noble dans build-iso.sh
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier l'espace de construction
+        run: |
+          set -Eeuo pipefail
+          [ -d /mnt ] || { echo "::error::/mnt absent sur ce runner"; exit 1; }
+          sudo install -d -m 0755 "$WORK"
+          libre=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
+          echo "/mnt : ${libre} Go libres"
+          [ "$libre" -ge 15 ] || { echo "::error::moins de 15 Go libres sur /mnt"; exit 1; }
+
+      - name: Dépendances de l'hôte
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap squashfs-tools xorriso qemu-system-x86 ovmf
+          # ovmf : firmware UEFI du test d'amorçage. isolinux et grub-efi ne sont
+          # PAS requis ici, build-iso.sh les installe dans le chroot.
+
+      # Le chroot est le gros poste de la construction : debootstrap puis
+      # l'installation d'environ 1,6 Go de paquets. La clé porte l'empreinte de
+      # build-iso.sh, donc toute modification de la liste de paquets ou de la
+      # distribution invalide le cache.
+      - name: Chroot en cache
+        id: cache_chroot
+        # Explicite plutot que « !inputs.sans_cache » : sur une poussee le
+        # contexte inputs n'existe pas, et se reposer sur la conversion de
+        # null est precisement ce qui avait fait sauter la construction de
+        # l'ISO sur un tag (release test-rc1 incomplete).
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sans_cache }}
+        uses: actions/cache@v4
+        with:
+          path: chroot-cache.tar
+          key: chroot-noble-${{ hashFiles('04 - live-iso/build-iso.sh') }}
+
+      - name: Déployer le chroot en cache
+        if: steps.cache_chroot.outputs.cache-hit == 'true'
+        run: |
+          set -Eeuo pipefail
+          sudo tar --numeric-owner -xf chroot-cache.tar -C "$WORK"
+          echo "chroot restauré : $(sudo du -sh "$WORK/chroot" | cut -f1)"
+
+      - name: Construire l'ISO
+        run: |
+          set -Eeuo pipefail
+          mkdir -p out
+          cd "04 - live-iso"
+          sudo env PXE_ISO_WORK="$WORK" \
+            bash ./build-iso.sh "$GITHUB_WORKSPACE/out/$ISO_NAME"
+          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/out/$ISO_NAME"*
+          ls -lh "$GITHUB_WORKSPACE/out/$ISO_NAME"
+
+      - name: Préparer le chroot pour le cache
+        if: ${{ (github.event_name != 'workflow_dispatch' || !inputs.sans_cache) && steps.cache_chroot.outputs.cache-hit != 'true' }}
+        run: |
+          set -Eeuo pipefail
+          sudo tar --numeric-owner -cf chroot-cache.tar -C "$WORK" chroot
+          sudo chown "$(id -u):$(id -g)" chroot-cache.tar
+          ls -lh chroot-cache.tar
+
+      - name: Vérifier le catalogue El Torito (BIOS + UEFI)
+        run: |
+          xorriso -indev "out/$ISO_NAME" -report_el_torito plain 2>&1 | tee eltorito.txt
+          imgs=$(grep 'El Torito boot img' eltorito.txt || true)
+          echo "$imgs"
+          echo "$imgs" | grep -q 'BIOS' || { echo "::error::entrée El Torito BIOS absente"; exit 1; }
+          echo "$imgs" | grep -q 'UEFI' || { echo "::error::entrée El Torito UEFI absente"; exit 1; }
+
+      # Les deux amorçages sont indépendants : les mener en parallèle économise
+      # une attente entière. Les runners GitHub n'ont pas KVM, QEMU retombe sur
+      # l'émulation, d'où des délais généreux. En local avec KVM, chacun prend
+      # environ une minute.
+      - name: Amorçage BIOS et UEFI (en parallèle)
+        run: |
+          set -Eeuo pipefail
+          tests/boot-test.sh "out/$ISO_NAME" bios 1500 > bios.log 2>&1 & pb=$!
+          tests/boot-test.sh "out/$ISO_NAME" uefi 1500 > uefi.log 2>&1 & pu=$!
+          rb=0; ru=0
+          wait "$pb" || rb=$?
+          wait "$pu" || ru=$?
+          echo "::group::console BIOS"; cat bios.log; echo "::endgroup::"
+          echo "::group::console UEFI"; cat uefi.log; echo "::endgroup::"
+          [ "$rb" -eq 0 ] || echo "::error::amorçage BIOS en échec (code $rb)"
+          [ "$ru" -eq 0 ] || echo "::error::amorçage UEFI en échec (code $ru)"
+          [ "$rb" -eq 0 ] && [ "$ru" -eq 0 ]
+
+      - name: Récapitulatif
+        if: always()
+        run: |
+          {
+            echo "## Amorçage"
+            echo
+            if [ -f "out/$ISO_NAME" ]; then
+              echo "ISO : \`$(du -h "out/$ISO_NAME" | cut -f1)\`"
+            fi
+            echo
+            echo "chroot en cache : \`${{ steps.cache_chroot.outputs.cache-hit || 'non' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  bout-en-bout:
+    name: Bout en bout PXE (serveur + clients)
+    # Jamais automatique : sans KVM, l'installation complète (apt puis
+    # compilation d'iPXE dans une VM émulée) dépasse largement l'heure et peut
+    # excéder le délai maximal d'un job. À lancer à la demande, ou en local où
+    # KVM ramène l'ensemble à quelques dizaines de minutes.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.bout_en_bout }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier l'espace de construction
+        run: |
+          set -Eeuo pipefail
+          sudo install -d -m 0755 "$WORK"
+          df -h / /mnt
+
+      - name: Dépendances de l'hôte
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debootstrap squashfs-tools xorriso qemu-system-x86 qemu-utils ovmf \
+            libvirt-daemon-system libvirt-clients
+          sudo systemctl start libvirtd
+          sudo virsh -c qemu:///system version
+
+      - name: Construire l'ISO
+        run: |
+          set -Eeuo pipefail
+          mkdir -p out
+          cd "04 - live-iso"
+          sudo env PXE_ISO_WORK="$WORK" \
+            bash ./build-iso.sh "$GITHUB_WORKSPACE/out/$ISO_NAME"
+          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/out/$ISO_NAME"*
+
+      - name: Labo PXE complet
+        run: sudo tests/e2e-pxe.sh "out/$ISO_NAME"
+
+      - name: Journaux du labo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journaux-labo-pxe
+          path: /srv/bits-e2e/*.log
+          retention-days: 7
+          if-no-files-found: warn

@@ -87,27 +87,36 @@ jobs:
           command -v lintian >/dev/null && lintian "$deb" || true
 
       # --- ISO live : la partie longue --------------------------------------
-      - name: Libérer de l'espace disque
+      # On construit sur /mnt, le disque temporaire du runner (~70 Go), au lieu
+      # de faire de la place sur le disque système. Supprimer dotnet, android,
+      # ghc et boost coûtait 81 s mesurées à chaque exécution, pour un espace
+      # dont on n'a pas besoin si on écrit au bon endroit.
+      - name: Vérifier l'espace de construction
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          df -h /
+          set -Eeuo pipefail
+          [ -d /mnt ] || { echo "::error::/mnt absent sur ce runner"; exit 1; }
+          sudo install -d -m 0755 /mnt/pxe-iso-build
+          libre=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
+          echo "/mnt : ${libre} Go libres"
+          [ "$libre" -ge 15 ] || { echo "::error::moins de 15 Go libres sur /mnt"; exit 1; }
+          df -h / /mnt
 
       - name: Dépendances de l'hôte
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            debootstrap squashfs-tools xorriso
+            debootstrap squashfs-tools xorriso qemu-system-x86 ovmf
           # isolinux et grub-efi ne sont PAS requis ici : build-iso.sh les
           # installe dans le chroot et en extrait isohdpfx.bin.
+          # qemu + ovmf servent aux tests d'amorçage qui précèdent la publication.
 
       - name: Construire l'ISO
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
         run: |
           cd "04 - live-iso"
-          sudo env PXE_ISO_WORK="$RUNNER_TEMP/pxe-iso-build" \
+          sudo env PXE_ISO_WORK=/mnt/pxe-iso-build \
             bash ./build-iso.sh "$GITHUB_WORKSPACE/out/$ISO_NAME"
           sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/out/$ISO_NAME"*
 
@@ -122,6 +131,18 @@ jobs:
           echo "$imgs"
           echo "$imgs" | grep -q 'BIOS' || { echo "::error::entrée El Torito BIOS absente"; exit 1; }
           echo "$imgs" | grep -q 'UEFI' || { echo "::error::entrée El Torito UEFI absente"; exit 1; }
+
+      # Deuxième garde-fou, complémentaire : El Torito prouve que les deux modes
+      # sont DÉCLARÉS, pas que l'image démarre. Une release ne doit pas pouvoir
+      # contenir une ISO qui panique. Les mêmes scripts tournent chez un
+      # contributeur : tests/run-all.sh <image.iso>.
+      - name: Amorçage réel BIOS
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
+        run: tests/boot-test.sh "out/$ISO_NAME" bios 1500
+
+      - name: Amorçage réel UEFI
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
+        run: tests/boot-test.sh "out/$ISO_NAME" uefi 1500
 
       # --- empreintes et récapitulatif --------------------------------------
       - name: Empreintes

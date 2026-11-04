@@ -1,0 +1,130 @@
+# Tests
+
+Trois niveaux, la même commande pour un contributeur et pour la CI :
+
+```bash
+# construire l'image à tester
+cd "04 - live-iso" && sudo ./build-iso.sh /srv/bits-test/boot-in-the-shell-live.iso
+
+# niveaux 1 et 2 : aucun privilège requis
+tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
+
+# les trois niveaux
+sudo tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
+```
+
+| Niveau | Ce que ça prouve | Prérequis | Durée avec KVM |
+|---|---|---|---|
+| 1. `boot-test.sh … bios` | l'ISO démarre réellement sur un firmware legacy | `qemu-system-x86` | ~1 min |
+| 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | ~1 min |
+| 3. `e2e-pxe.sh` | le serveur s'installe **seul** et des clients BIOS **et** UEFI démarrent dessus | root, libvirt, réseau sortant | dizaines de minutes |
+
+Un niveau qui ne peut pas tourner est annoncé **IGNORÉ**, jamais réussi. Un test
+sauté qui compte comme vert est exactement le défaut qui a laissé publier une
+release sans ISO.
+
+## Pourquoi ces tests existent
+
+Les deux premiers défauts trouvés par ces tests, dès leur première exécution :
+
+1. **L'ISO ne démarrait pas en UEFI.** Le `grub.cfg` embarqué dans
+   `BOOTX64.EFI` écrasait `$prefix` pour le faire pointer sur l'ISO. GRUB
+   cherchait alors ses modules sur l'ISO, qui n'en contient aucun, et
+   `configfile` n'étant pas déjà chargé, l'amorçage s'arrêtait sur l'invite
+   `grub>`. Le contrôle El Torito ne pouvait pas le voir : l'entrée UEFI était
+   bien déclarée, elle ne démarrait pas.
+2. **Les services PXE étaient activés dans l'image.** `dnsmasq`, `nginx`,
+   `nfs-server`, `smbd`, `nmbd` et `samba-ad-dc` démarraient à chaque amorçage
+   live, sans configuration, et échouaient.
+
+Aucun des deux n'était détectable sans démarrer réellement l'image.
+
+Le contrôle El Torito de la CI prouve que l'image **déclare** ses deux modes
+d'amorçage. Il ne prouve pas qu'elle démarre : une ISO peut contenir tous les
+bons fichiers et paniquer. Et rien ne prouvait que le déploiement allait au
+bout — le pipeline n'avait jamais été validé au-delà de la préparation du
+disque.
+
+### Niveaux 1 et 2 — l'amorçage
+
+QEMU démarre l'ISO, la console série est lue, et le test attend le marqueur
+`BITS-LIVE-READY` émis par `bits-live-ready.service`. Des motifs d'échec
+(`Kernel panic`, `No init found`, `Unable to find a medium`…) sont surveillés en
+parallèle : sans eux, un noyau qui panique ne se distingue pas d'un démarrage
+lent et le test attendrait son délai entier.
+
+Ni root ni libvirt : c'est volontaire, pour que ces deux niveaux tournent chez
+tout le monde et sur un runner GitHub.
+
+### Niveau 3 — la chaîne complète
+
+`e2e-pxe.sh` monte un labo jetable en libvirt :
+
+- un **réseau à lui** (`bits-e2e-net`, `192.168.90.0/24` par défaut) sur son
+  propre pont. Le labo ne peut donc pas répondre en ProxyDHCP sur le réseau
+  physique, et peut tourner à côté d'un labo existant sans créer deux
+  répondeurs concurrents ;
+- le **DHCP de ce réseau libvirt tient le rôle du routeur du site** : il
+  distribue les adresses. Le serveur sous test ne fait que du ProxyDHCP. C'est
+  exactement la topologie de production, et c'est ce qui donne sa valeur au
+  test ;
+- le réseau est en **NAT** : le pipeline installe des paquets et clone iPXE.
+  Sans accès sortant il échoue à l'étape 10.
+
+Déroulé : l'ISO s'installe sans interaction sur un disque de données virtio,
+puis l'hôte vérifie HTTP et TFTP depuis le pont, puis **deux clients réels**
+démarrent par le réseau — un BIOS, un UEFI — et doivent afficher le menu iPXE.
+
+Le serveur est démarré en **noyau direct** (`<kernel>`/`<cmdline>` libvirt) :
+c'est le seul moyen de passer `bits.auto` sans modifier l'image. Les chargeurs
+isolinux et GRUB sont donc couverts ailleurs — par le contrôle El Torito et par
+les niveaux 1 et 2.
+
+Le marqueur attendu côté client est `Serveur PXE`, le titre du menu iPXE, qui
+est présent même avec un catalogue de médias vide.
+
+### Ce que chaque client couvre réellement
+
+Les deux clients ne suivent pas le même chemin, et c'est utile de le savoir pour
+lire un échec :
+
+- le **client UEFI** part du firmware OVMF, qui n'est pas iPXE. dnsmasq ne le
+  marque donc pas `ipxe` et lui sert `snponly.efi` en **TFTP** ; iPXE démarre
+  ensuite et enchaîne sur le menu en HTTP. Ce client couvre toute la chaîne ;
+- le **client BIOS** utilise la ROM e1000 de QEMU, **qui est déjà iPXE**.
+  dnsmasq le marque `ipxe` et lui donne directement l'URL HTTP du menu : le
+  téléchargement TFTP du chargeur n'est pas exercé par ce client.
+
+C'est pourquoi le test récupère aussi `undionly.kpxe` et `snponly.efi` **en TFTP
+depuis l'hôte** avant de lancer les clients : sans ce contrôle, une panne du
+serveur TFTP pour le chargeur BIOS passerait inaperçue en labo et n'apparaîtrait
+que sur du matériel réel.
+
+```bash
+BITS_E2E_KEEP=1 sudo tests/e2e-pxe.sh image.iso   # conserver le labo pour inspection
+sudo tests/e2e-pxe.sh --nettoyer                  # le démonter ensuite
+BITS_E2E_SUBNET=192.168.91 sudo tests/e2e-pxe.sh image.iso   # si 192.168.90/24 est pris
+```
+
+## Le mode non interactif, hors tests
+
+Le niveau 3 n'a été possible qu'en rendant l'assistant pilotable, ce qui sert
+aussi à déployer en série. Paramètres lus sur la ligne de commande du noyau :
+
+| Paramètre | Rôle |
+|---|---|
+| `bits.auto` | aucune question, journal et marqueurs sur la console |
+| `bits.data-disk=<chemin>` | **obligatoire** avec `bits.auto` |
+| `bits.hostname=<nom>` | nom du serveur |
+| `bits.iface=<ifname>` | interface qui servira le PXE |
+| `bits.gateway=<ip>` / `bits.dns=<ip>` | valeurs déclarées dans `pxe.env` |
+| `bits.media=none` \| `<chemin>` | catalogue de médias ; `none` n'en active aucun |
+
+`bits.auto` **exige** `bits.data-disk` : le mode automatique ne devine jamais
+quel disque effacer. `--prepare-data-disk` efface entièrement sa cible, et un
+démarrage automatique sur une machine garnie ne doit pas pouvoir détruire des
+données par défaut.
+
+Le mode auto ne touche pas au réseau : l'interface doit déjà porter son adresse
+(DHCP ou configuration statique préalable). Il écrit `BITS-PXE-READY <ip>` en
+cas de succès, `BITS-PXE-FAILED <raison>` sinon.
