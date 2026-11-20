@@ -123,6 +123,26 @@ de la place ».
   clones de disque peuvent contenir les données personnelles des anciens
   propriétaires des postes.
 
+## Une clé USB autonome, qui sert le PXE hors ligne
+
+L'ISO seule a besoin du réseau au premier démarrage : le pipeline télécharge les
+médias et compile iPXE. Pour un atelier sans internet, `tools/` fabrique une clé
+qui porte tout :
+
+```bash
+sudo tools/construire-ipxe.sh /chemin/ipxe
+sudo tools/creer-cle-usb.sh --iso <cette ISO> --cible /dev/sdX --ipxe /chemin/ipxe \
+  --media "/chemin/killbit-live.iso:debian-live-iso:killbit:Killbit" \
+  --confirmer EFFACER
+```
+
+La clé reçoit l'ISO en première partition et une seconde partition ext4
+étiquetée `PXE_DATA` avec les médias et les chargeurs iPXE déjà compilés.
+L'assistant retrouve cette partition **par son étiquette, y compris sur le média
+de démarrage**, et réutilise son contenu sans rien effacer.
+
+Voir [tools/README.md](../tools/README.md).
+
 ## Déployer sans interaction
 
 L'assistant peut se passer d'opérateur, ce qui sert au déploiement en série et
