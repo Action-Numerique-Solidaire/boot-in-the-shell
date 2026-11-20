@@ -14,7 +14,9 @@ CONFIG_SUBDIR=boot-config
 # inscriptible, et qu'il fonctionne aussi bien en PXE qu'en démarrage USB.
 #
 #   bits.auto                 active le mode non interactif
-#   bits.data-disk=<chemin>   disque de données, OBLIGATOIRE en mode auto
+#   bits.data-disk=<chemin>   disque entier à EFFACER et préparer
+#   bits.data-part=<chemin>   partition existante à réutiliser, rien n'est effacé
+#                             (l'un des deux est obligatoire en mode auto)
 #   bits.hostname=<nom>       nom du serveur
 #   bits.iface=<ifname>       interface qui servira le PXE (si la machine en a plusieurs)
 #   bits.gateway=<ip>         passerelle déclarée dans pxe.env
@@ -22,6 +24,7 @@ CONFIG_SUBDIR=boot-config
 #   bits.media=none|<chemin>  catalogue de médias ; « none » n'en active aucun
 AUTO=0
 AUTO_DATA_DISK=""
+AUTO_DATA_PART=""
 AUTO_HOSTNAME=""
 AUTO_IFACE=""
 AUTO_GATEWAY=""
@@ -31,6 +34,7 @@ for arg in $(cat /proc/cmdline 2>/dev/null || true); do
   case "$arg" in
     bits.auto)          AUTO=1 ;;
     bits.data-disk=*)   AUTO_DATA_DISK="${arg#*=}" ;;
+    bits.data-part=*)   AUTO_DATA_PART="${arg#*=}" ;;
     bits.hostname=*)    AUTO_HOSTNAME="${arg#*=}" ;;
     bits.iface=*)       AUTO_IFACE="${arg#*=}" ;;
     bits.gateway=*)     AUTO_GATEWAY="${arg#*=}" ;;
@@ -63,7 +67,16 @@ trap 'fail "interruption inattendue (ligne $LINENO)"' ERR
 echo "== Assistant de démarrage du serveur PXE =="
 [[ $AUTO -eq 1 ]] && echo "mode non interactif (bits.auto)"
 
-# --- 1. Identifier le disque de données local (hors média de démarrage live) ---
+# --- 1. Trouver où stocker les données du serveur PXE -------------------------
+# Trois cas, dans cet ordre de priorité :
+#
+#   a. une partition déjà étiquetée PXE_DATA, OÙ QU'ELLE SOIT — y compris sur le
+#      média de démarrage. C'est le cas de la clé USB fabriquée par
+#      tools/creer-cle-usb.sh, dont la seconde partition porte déjà les médias :
+#      rien n'est effacé, la configuration et le catalogue sont relus ;
+#   b. bits.data-part=<partition>, pour désigner une partition existante ;
+#   c. à défaut, un disque entier à préparer, média de démarrage exclu. C'est le
+#      seul des trois cas qui efface quoi que ce soit.
 live_source="$(findmnt -rn -o SOURCE /run/live/medium 2>/dev/null || findmnt -rn -o SOURCE /lib/live/mount/medium 2>/dev/null || true)"
 live_disk=""
 if [[ -n "$live_source" ]]; then
@@ -71,48 +84,78 @@ if [[ -n "$live_source" ]]; then
   [[ -n "$live_parent" ]] && live_disk="/dev/$live_parent"
 fi
 
-if [[ $AUTO -eq 1 ]]; then
+# Identifiant stable, ou chemin brut à défaut : fstab et pxe.env doivent
+# survivre à un changement de nom de périphérique entre deux démarrages.
+by_id_for() {
+  local name="${1##*/}" found=""
+  [[ -n "$name" ]] || return 0
+  found="$(find /dev/disk/by-id -maxdepth 1 -lname "*/${name}" 2>/dev/null | sort | head -n1)"
+  printf '%s' "${found:-$1}"
+}
+
+# Partition portant déjà l'étiquette, quelle que soit sa position et son disque.
+trouver_partition_etiquetee() {
+  local found
+  found="$(blkid -L "$STATE_LABEL" 2>/dev/null || true)"
+  if [[ -z "$found" ]]; then
+    # Repli si le cache blkid est absent : lecture directe de la table.
+    found="$(lsblk -prno NAME,LABEL 2>/dev/null \
+      | awk -v l="$STATE_LABEL" '$2 == l {print $1; exit}')"
+  fi
+  printf '%s' "$found"
+}
+
+data_part=""
+data_disk=""
+prepare_needed=1
+
+if [[ -n "$AUTO_DATA_PART" ]]; then
+  data_part="$(readlink -f "$AUTO_DATA_PART" 2>/dev/null || true)"
+  [[ -b "$data_part" ]] || fail "bits.data-part=$AUTO_DATA_PART ne désigne pas un périphérique bloc."
+  prepare_needed=0
+else
+  existing="$(trouver_partition_etiquetee)"
+  if [[ -n "$existing" && -b "$existing" ]]; then
+    data_part="$existing"
+    prepare_needed=0
+  fi
+fi
+
+if [[ -n "$data_part" ]]; then
+  parent="$(lsblk -no PKNAME "$data_part" 2>/dev/null | head -n1 || true)"
+  [[ -n "$parent" ]] && data_disk="/dev/$parent"
+elif [[ $AUTO -eq 1 ]]; then
   # Le mode auto ne devine JAMAIS quel disque effacer : --prepare-data-disk
   # efface entièrement sa cible, et un démarrage automatique sur une machine
   # garnie ne doit pas pouvoir détruire des données par défaut.
-  [[ -n "$AUTO_DATA_DISK" ]] || fail "bits.auto exige bits.data-disk=<chemin> : le mode auto ne choisit pas seul le disque à effacer."
+  [[ -n "$AUTO_DATA_DISK" ]] || fail "bits.auto exige bits.data-disk=<disque> ou bits.data-part=<partition> : le mode auto ne choisit pas seul le disque à effacer."
   data_disk="$(readlink -f "$AUTO_DATA_DISK" 2>/dev/null || true)"
   [[ -b "$data_disk" ]] || fail "bits.data-disk=$AUTO_DATA_DISK ne désigne pas un périphérique bloc."
   [[ "$data_disk" != "$live_disk" ]] || fail "bits.data-disk désigne le média de démarrage ($live_disk)."
 else
-  data_disk=""
-  preferred_disk=""
   while read -r name type; do
     [[ "$type" == "disk" ]] || continue
     dev="/dev/$name"
     [[ "$dev" == "$live_disk" ]] && continue
     [[ -z "$data_disk" ]] && data_disk="$dev"
-    part_name="$(lsblk -rno NAME "$dev" | sed -n '2p')"
-    if [[ -n "$part_name" ]] && [[ "$(lsblk -no LABEL "/dev/$part_name" 2>/dev/null || true)" == "$STATE_LABEL" ]]; then
-      preferred_disk="$dev"
-    fi
   done < <(lsblk -dn -o NAME,TYPE)
-
-  [[ -n "$preferred_disk" ]] && data_disk="$preferred_disk"
-  [[ -n "$data_disk" ]] || die "Aucun disque local utilisable trouvé (en dehors du média de démarrage)."
+  [[ -n "$data_disk" ]] || die "Aucun disque local utilisable trouvé (en dehors du média de démarrage), et aucune partition $STATE_LABEL."
 fi
 
-data_disk_name="${data_disk##*/}"
-data_disk_by_id="$(find /dev/disk/by-id -maxdepth 1 -lname "*/${data_disk_name}" 2>/dev/null | sort | head -n1 || true)"
-[[ -n "$data_disk_by_id" ]] || die "Pas d'identifiant stable /dev/disk/by-id/ pour $data_disk. Impossible de continuer."
+data_disk_by_id="$(by_id_for "$data_disk")"
 
-part_name="$(lsblk -rno NAME "$data_disk" | sed -n '2p')"
-prepare_needed=1
 mounted_existing=0
-if [[ -n "$part_name" ]] && [[ "$(lsblk -no LABEL "/dev/$part_name" 2>/dev/null || true)" == "$STATE_LABEL" ]]; then
-  prepare_needed=0
+if [[ $prepare_needed -eq 0 ]]; then
   install -d -m 0755 "$DATA_MOUNT"
-  if mount "/dev/$part_name" "$DATA_MOUNT"; then
+  if mountpoint -q "$DATA_MOUNT" || mount "$data_part" "$DATA_MOUNT"; then
     mounted_existing=1
   else
-    echo "Montage de /dev/$part_name impossible, nouvelle préparation forcée." >&2
-    prepare_needed=1
+    fail "La partition $STATE_LABEL ($data_part) existe mais ne se monte pas."
   fi
+  data_part_by_id="$(by_id_for "$data_part")"
+else
+  # La partition sera créée en première position par 20-prepare-data-disk.sh.
+  data_part_by_id="${data_disk_by_id}-part1"
 fi
 
 config_dir="$DATA_MOUNT/$CONFIG_SUBDIR"
@@ -140,7 +183,16 @@ else
   # Repli : une interface dédiée au PXE peut ne pas porter la route par défaut.
   [[ -n "$gw" ]] || gw="$(ip -o -4 route show to default | awk '{print $3; exit}')"
   [[ -n "$AUTO_GATEWAY" ]] && gw="$AUTO_GATEWAY"
-  [[ -n "$gw" ]] || die "Aucune passerelle trouvée pour $iface. Préciser bits.gateway=<ip>."
+  if [[ -z "$gw" ]]; then
+    # Pas de routeur sur ce réseau. Ce n'est pas une erreur : servir du PXE ne
+    # demande aucune route par défaut, et un atelier avec un simple commutateur
+    # est un cas valable. On enregistre l'adresse du serveur lui-même, parce que
+    # pxe.env exige une valeur, et on le dit explicitement plutôt que d'inventer
+    # une passerelle en silence.
+    gw="${cidr%/*}"
+    echo "Aucune passerelle détectée sur $iface : le serveur n'aura pas de route par défaut."
+    echo "La valeur enregistrée est sa propre adresse ($gw). Préciser bits.gateway=<ip> si un routeur existe."
+  fi
   dns="$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
   [[ -n "$dns" ]] || dns="$gw"
   [[ -n "$AUTO_DNS" ]] && dns="$AUTO_DNS"
@@ -159,7 +211,7 @@ fi
 [[ -n "$AUTO_HOSTNAME" ]] && PXE_HOSTNAME="$AUTO_HOSTNAME"
 
 PXE_DATA_DISK="$data_disk_by_id"
-PXE_DATA_PARTITION="${data_disk_by_id}-part1"
+PXE_DATA_PARTITION="$data_part_by_id"
 PXE_DATA_MOUNT="$DATA_MOUNT"
 PXE_HTTP_ROOT="/var/www/html/pxe"
 PXE_TFTP_ROOT="/srv/tftp"
@@ -180,7 +232,7 @@ Adresse IP fixe   : $PXE_ADDRESS_CIDR
 Passerelle        : $PXE_GATEWAY
 DNS               : $PXE_DNS
 Sous-réseau PXE   : $PXE_SUBNET_CIDR
-Disque de données : $data_disk $([[ $prepare_needed -eq 1 ]] && echo '(sera effacé et préparé)' || echo '(déjà préparé, conservé)')
+Stockage données  : $([[ $prepare_needed -eq 1 ]] && echo "$data_disk (SERA EFFACÉ et préparé)" || echo "$data_part (déjà préparé, conservé)")
 Source            : $([[ $persisted -eq 1 ]] && echo 'configuration précédente retrouvée sur le disque' || echo 'valeurs détectées automatiquement (DHCP)')"
 
 if [[ $AUTO -eq 1 ]]; then
@@ -239,7 +291,9 @@ if [[ "$AUTO_MEDIA" == "none" ]]; then
 elif [[ -n "$AUTO_MEDIA" ]]; then
   [[ -f "$AUTO_MEDIA" ]] || fail "bits.media=$AUTO_MEDIA : fichier introuvable."
   cp -a "$AUTO_MEDIA" "$PROTO_ROOT/config/media.conf"
-elif [[ $persisted -eq 1 && -f "$config_dir/media.conf" ]]; then
+elif [[ -f "$config_dir/media.conf" ]]; then
+  # Indépendant de pxe.env : une clé USB livre son catalogue sans pouvoir
+  # livrer pxe.env, qui dépend du réseau de la machine où elle démarre.
   cp -a "$config_dir/media.conf" "$PROTO_ROOT/config/media.conf"
 else
   cp -a "$PROTO_ROOT/config/media.conf.example" "$PROTO_ROOT/config/media.conf"
