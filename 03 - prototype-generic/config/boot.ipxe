@@ -1,0 +1,10 @@
+#!ipxe
+# Script embarqué dans les deux chargeurs iPXE.
+#
+# Aucune adresse n'y est figée : ${filename} est ce que dnsmasq sert à un
+# client déjà iPXE, et ${next-server} l'adresse du serveur dans la réponse
+# DHCP. Les chargeurs peuvent donc être compilés une fois pour toutes et livrés
+# avec la clé USB, et changer l'adresse du serveur ne demande pas de les
+# recompiler.
+dhcp
+chain ${filename} || chain http://${next-server}/pxe/menu.ipxe || shell

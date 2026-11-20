@@ -50,6 +50,16 @@ dhcp-boot=tag:!ipxe,tag:!efi64,undionly.kpxe,,$PXE_IP
 pxe-service=tag:!ipxe,BC_EFI,"iPXE UEFI",snponly.efi,$PXE_IP
 pxe-service=tag:!ipxe,X86-64_EFI,"iPXE UEFI x64",snponly.efi,$PXE_IP
 pxe-service=tag:!ipxe,x86PC,"iPXE BIOS",undionly.kpxe,$PXE_IP
+# Client dont la ROM est DÉJÀ iPXE. En mode ProxyDHCP, c'est pxe-service qui
+# délivre le fichier d'amorçage, pas dhcp-boot : sans ces trois lignes, un tel
+# client ne recevait rien et s'arrêtait sur « Nothing to boot ». C'est le cas
+# de la ROM e1000 de QEMU, et de certaines cartes réseau livrées avec iPXE.
+# On lui sert le script du menu par TFTP, qu'iPXE exécute parce qu'il commence
+# par « #!ipxe ». Lui servir undionly.kpxe aurait créé une boucle : iPXE
+# chargeant iPXE, qui redemande la même chose.
+pxe-service=tag:ipxe,x86PC,"Boot in the Shell",menu.ipxe,$PXE_IP
+pxe-service=tag:ipxe,X86-64_EFI,"Boot in the Shell",menu.ipxe,$PXE_IP
+pxe-service=tag:ipxe,BC_EFI,"Boot in the Shell",menu.ipxe,$PXE_IP
 log-dhcp
 EOF
 
@@ -83,6 +93,31 @@ while IFS='|' read -r enabled id type filename url sha label; do
       install -d -m 0755 "$PXE_HTTP_ROOT/$id"
       install -m 0644 "$vmlinuz" "$PXE_HTTP_ROOT/$id/vmlinuz"
       install -m 0644 "$initrd" "$PXE_HTTP_ROOT/$id/initrd"
+      umount "$mount_tmp"
+      nfs_mount="$PXE_NFS_MOUNT_ROOT/$id"
+      install -d -m 0755 "$nfs_mount"
+      append_fstab "$media_iso $nfs_mount iso9660 loop,ro,nofail 0 0"
+      mountpoint -q "$nfs_mount" || mount "$nfs_mount"
+      printf '%s %s(ro,sync,no_subtree_check)\n' "$nfs_mount" "$PXE_SUBNET_CIDR" >> "$exports_file"
+      cat >> "$menu_file" <<EOF
+item $id $label
+EOF
+      ;;
+    debian-live-iso)
+      # Image Debian live (live-boot) : son noyau et son initrd sont sous /live,
+      # pas sous /casper, et elle démarre avec « boot=live », pas « boot=casper ».
+      # Servir une telle image par la branche casper donnait un noyau qui ne
+      # trouvait jamais son système de fichiers. C'est le format de l'ISO
+      # killbit d'ANS.
+      media_iso="$PXE_DATA_MOUNT/iso/$filename"
+      install -m 0444 "$source_file" "$media_iso"
+      mount -o loop,ro "$media_iso" "$mount_tmp"
+      vmlinuz="$(find "$mount_tmp/live" -maxdepth 1 -type f -name 'vmlinuz*' | head -n1)"
+      initrd="$(find "$mount_tmp/live" -maxdepth 1 -type f -name 'initrd*' | head -n1)"
+      [[ -n "$vmlinuz" && -n "$initrd" ]] || die "Noyau ou initrd introuvable sous /live dans $filename"
+      install -d -m 0755 "$PXE_HTTP_ROOT/$id"
+      install -m 0644 "$vmlinuz" "$PXE_HTTP_ROOT/$id/vmlinuz"
+      install -m 0644 "$initrd" "$PXE_HTTP_ROOT/$id/initrd.img"
       umount "$mount_tmp"
       nfs_mount="$PXE_NFS_MOUNT_ROOT/$id"
       install -d -m 0755 "$nfs_mount"
@@ -157,6 +192,14 @@ initrd http://$PXE_IP/pxe/$id/initrd
 boot || goto failed
 EOF
       ;;
+    debian-live-iso)
+      cat >> "$menu_file" <<EOF
+:$id
+kernel http://$PXE_IP/pxe/$id/vmlinuz initrd=initrd.img boot=live components netboot=nfs nfsroot=$PXE_IP:$PXE_NFS_MOUNT_ROOT/$id ip=dhcp
+initrd http://$PXE_IP/pxe/$id/initrd.img
+boot || goto failed
+EOF
+      ;;
     clonezilla-zip)
       cat >> "$menu_file" <<EOF
 :$id
@@ -196,6 +239,10 @@ if [[ "$windows_enabled" == yes ]]; then
   grep -Fq 'include = /etc/samba/generic-pxe-shares.conf' /etc/samba/smb.conf || \
     printf '\ninclude = /etc/samba/generic-pxe-shares.conf\n' >> /etc/samba/smb.conf
 fi
+
+# Le menu est servi en HTTP pour les clients qui chaînent une URL, et en TFTP
+# pour ceux dont la ROM iPXE reçoit un simple nom de fichier par ProxyDHCP.
+install -m 0644 "$menu_file" "$PXE_TFTP_ROOT/menu.ipxe"
 
 systemctl daemon-reload
 exportfs -ra

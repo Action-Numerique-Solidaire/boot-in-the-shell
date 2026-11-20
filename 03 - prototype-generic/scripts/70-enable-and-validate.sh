@@ -42,6 +42,9 @@ done
 curl --fail --silent --show-error "http://$PXE_IP/pxe/menu.ipxe" >/dev/null
 [[ -s "$PXE_TFTP_ROOT/undionly.kpxe" && -s "$PXE_TFTP_ROOT/snponly.efi" ]] || \
   die "Chargeurs TFTP absents."
+# Le menu doit aussi être joignable en TFTP : c'est par là que passe un client
+# dont la ROM est déjà iPXE.
+[[ -s "$PXE_TFTP_ROOT/menu.ipxe" ]] || die "Menu iPXE absent du répertoire TFTP."
 
 while IFS='|' read -r enabled id type filename url sha label; do
   [[ "$enabled" == yes ]] || continue
@@ -49,6 +52,11 @@ while IFS='|' read -r enabled id type filename url sha label; do
     casper-iso)
       curl --fail --silent --show-error "http://$PXE_IP/pxe/$id/vmlinuz" >/dev/null
       curl --fail --silent --show-error "http://$PXE_IP/pxe/$id/initrd" >/dev/null
+      mountpoint -q "$PXE_NFS_MOUNT_ROOT/$id" || die "Montage NFS absent pour $label."
+      ;;
+    debian-live-iso)
+      curl --fail --silent --show-error "http://$PXE_IP/pxe/$id/vmlinuz" >/dev/null
+      curl --fail --silent --show-error "http://$PXE_IP/pxe/$id/initrd.img" >/dev/null
       mountpoint -q "$PXE_NFS_MOUNT_ROOT/$id" || die "Montage NFS absent pour $label."
       ;;
     clonezilla-zip)

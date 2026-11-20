@@ -25,9 +25,17 @@ count=0
 while IFS='|' read -r enabled id type filename url sha label; do
   [[ "$enabled" == "yes" ]] || continue
   safe_id "$id"
-  [[ "$type" =~ ^(casper-iso|clonezilla-zip|windows-iso)$ ]] || die "Type inconnu pour $id : $type"
+  # Trois endroits énumèrent les types : ici, et les deux « case » de
+  # 60-publish-media.sh (publication puis entrée de menu). Ajouter un type
+  # demande de les mettre à jour tous les trois, et 70-enable-and-validate.sh
+  # avec, sinon le média n'est pas contrôlé après publication.
+  [[ "$type" =~ ^(casper-iso|debian-live-iso|clonezilla-zip|windows-iso)$ ]] || die "Type inconnu pour $id : $type"
   [[ -n "$filename" && -n "$label" ]] || die "Ligne média incomplète pour $id."
-  [[ "$url" =~ ^https:// ]] || die "URL HTTPS absente ou invalide pour $id."
+  # https:// pour ce qui vient du réseau, file:// pour un média déjà sur le
+  # disque de données — le cas d'une clé USB pré-remplie, où il n'y a rien à
+  # télécharger. L'exigence de HTTPS visait le transport en clair ; file:// ne
+  # transporte rien, et l'empreinte SHA-256 reste vérifiée dans les deux cas.
+  [[ "$url" =~ ^(https://|file:///) ]] || die "URL invalide pour $id : attendu https:// ou file:///."
   [[ "$url" != *REPLACE_* ]] || die "URL à renseigner pour $id."
   [[ "$sha" =~ ^[0-9a-fA-F]{64}$ ]] || die "SHA-256 à renseigner pour $id."
   count=$((count + 1))
