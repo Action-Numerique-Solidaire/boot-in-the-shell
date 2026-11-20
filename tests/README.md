@@ -19,6 +19,27 @@ sudo tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
 | 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | **46 s** avec KVM |
 | 3. `e2e-pxe.sh` | le serveur s'installe **seul** et des clients BIOS **et** UEFI démarrent dessus | root, libvirt, réseau sortant | dizaines de minutes |
 
+Deux modes s'ajoutent pour la clé USB :
+
+```bash
+# la clé démarre-t-elle vraiment, en BIOS puis en UEFI ?
+tests/boot-test.sh /chemin/cle.img bios 900 disque
+tests/boot-test.sh /chemin/cle.img uefi 900 disque
+
+# la chaîne complète en partant de la clé, sur un réseau SANS accès sortant
+sudo BITS_E2E_CLE=1 tests/e2e-pxe.sh /chemin/cle.img
+```
+
+`BITS_E2E_CLE=1` présente le support comme une clé USB, n'ouvre **aucun accès
+sortant** sur le réseau du labo et ne crée aucun disque de données : c'est la
+partition `PXE_DATA` de la clé et son catalogue qui servent. Sans l'isolement du
+réseau, le test ne prouverait pas le fonctionnement hors ligne — le pipeline
+irait chercher sur internet ce qui manque, sans qu'on le voie.
+
+Mesures du 2026-11-20, avec KVM : clé amorcée en 21 s en BIOS et 30 s en UEFI ;
+serveur installé depuis la clé en 40 s ; client BIOS au menu en 15 s, client
+UEFI en 20 s.
+
 Sans KVM, les deux premiers niveaux tournent en émulation. Mesuré sur un runner
 GitHub, menés **en parallèle** : 145 s pour les deux.
 

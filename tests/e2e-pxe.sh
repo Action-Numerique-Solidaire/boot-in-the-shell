@@ -14,7 +14,15 @@
 # installe des paquets et clone iPXE : sans accès sortant il échoue à l'étape 10.
 #
 # Usage : sudo tests/e2e-pxe.sh <image.iso> [timeout_serveur_s] [timeout_client_s]
+#         sudo BITS_E2E_CLE=1 tests/e2e-pxe.sh <cle.img> [...]
 #         sudo tests/e2e-pxe.sh --nettoyer
+#
+# BITS_E2E_CLE=1 : le support donné est une clé fabriquée par
+# tools/creer-cle-usb.sh. Elle est alors présentée au serveur comme une clé USB,
+# et c'est SA partition PXE_DATA et SON catalogue qui servent — aucun disque de
+# données n'est créé, et rien n'est téléchargé. C'est le scénario réel de la
+# clé, éprouvé de bout en bout.
+#
 # Variables : BITS_E2E_WORK (répertoire de travail), BITS_E2E_SUBNET (3 premiers
 #             octets), BITS_E2E_KEEP=1 (conserver le labo pour inspection).
 set -Eeuo pipefail
@@ -83,10 +91,37 @@ fi
 DOMTYPE=qemu
 if [[ -w /dev/kvm ]]; then
   DOMTYPE=kvm
-  log "KVM disponible : labo accéléré"
+  log "KVM accessible ici : labo accéléré si libvirt y a droit aussi"
 else
   log "pas de KVM : émulation logicielle, comptez plusieurs heures"
 fi
+
+# libvirt ne lance pas QEMU sous l'utilisateur appelant mais sous le sien
+# (libvirt-qemu), qui doit pouvoir ouvrir /dev/kvm. Une ACL posée pour
+# l'utilisateur de session ne lui profite pas, et le groupe de /dev/kvm n'est
+# pas toujours « kvm » — vu avec un GID orphelin, où le démarrage échouait sur
+# « Could not access KVM kernel module: Permission denied ». On bascule alors en
+# émulation au lieu d'abandonner, pour que le test tourne chez tout le monde.
+demarrer_domaine() {
+  local nom="$1" xml="$2"
+  local err="${WORK:?}/start-$nom.err"
+  "${VIRSH[@]}" define "$xml" >/dev/null
+  if "${VIRSH[@]}" start "$nom" >/dev/null 2>"$err"; then
+    return 0
+  fi
+  if [[ "$DOMTYPE" == "kvm" ]] && grep -qi "kvm" "$err"; then
+    echo "AVERTISSEMENT : libvirt ne peut pas utiliser KVM, bascule en émulation." >&2
+    head -2 "$err" >&2
+    DOMTYPE=qemu
+    "${VIRSH[@]}" undefine "$nom" >/dev/null 2>&1 || true
+    sed -i "s|<domain type='kvm'>|<domain type='qemu'>|" "$xml"
+    "${VIRSH[@]}" define "$xml" >/dev/null
+    "${VIRSH[@]}" start "$nom" >/dev/null
+    return 0
+  fi
+  cat "$err" >&2
+  die "Démarrage du domaine $nom impossible."
+}
 
 final() {
   local rc=$?
@@ -109,11 +144,23 @@ install -d -m 0755 "${WORK:?}"
 find "${WORK:?}" -maxdepth 1 -type f \( -name '*.log' -o -name '*.fd' -o -name '*.xml' \) -delete
 
 # --- 1. Réseau du labo --------------------------------------------------------
-log "Définition du réseau $NET ($SUBNET.0/24, NAT, DHCP $SUBNET.50-99)"
+# Une clé préparée ne doit avoir besoin d'AUCUN accès sortant : médias déjà
+# présents, chargeurs iPXE déjà compilés, prérequis déjà installés. On lui
+# retire donc le NAT, sinon le test ne prouverait pas le fonctionnement hors
+# ligne — le pipeline irait chercher ce qui manque sur internet sans qu'on le
+# voie. Le chemin ISO + disque vierge, lui, a besoin du réseau à l'étape 10 et
+# à la compilation d'iPXE.
+if [[ "${BITS_E2E_CLE:-0}" == "1" ]]; then
+  FORWARD=""
+  log "Définition du réseau $NET ($SUBNET.0/24, ISOLÉ sans accès sortant, DHCP $SUBNET.50-99)"
+else
+  FORWARD="  <forward mode='nat'/>"
+  log "Définition du réseau $NET ($SUBNET.0/24, NAT, DHCP $SUBNET.50-99)"
+fi
 cat > "${WORK:?}/net.xml" <<EOF
 <network>
   <name>$NET</name>
-  <forward mode='nat'/>
+$FORWARD
   <bridge name='$BRIDGE' stp='on' delay='0'/>
   <ip address='$SUBNET.1' netmask='255.255.255.0'>
     <dhcp>
@@ -140,8 +187,39 @@ xorriso -osirrox on -indev "$ISO" \
 [[ -s "${WORK:?}/vmlinuz" && -s "${WORK:?}/initrd.img" ]] || die "Extraction du noyau/initrd échouée depuis $ISO"
 
 # --- 3. Serveur PXE sous test -------------------------------------------------
-log "Création du disque de données (8 Gio) et du serveur"
-qemu-img create -f qcow2 "${WORK:?}/data.qcow2" 8G >/dev/null
+if [[ "${BITS_E2E_CLE:-0}" == "1" ]]; then
+  log "Support traité comme une clé prête : ni disque de données, ni téléchargement"
+else
+  log "Création du disque de données (8 Gio)"
+  qemu-img create -f qcow2 "${WORK:?}/data.qcow2" 8G >/dev/null
+fi
+
+if [[ "${BITS_E2E_CLE:-0}" == "1" ]]; then
+  # La clé est présentée en USB, comme sur le matériel. Aucune option de disque
+  # de données : l'assistant doit retrouver seul la partition PXE_DATA par son
+  # étiquette, y compris sur le média de démarrage. Aucun bits.media non plus :
+  # c'est le catalogue de la clé qui doit faire foi.
+  CMDLINE="boot=live components console=tty0 console=ttyS0,115200 bits.auto"
+  SUPPORT_XML="    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='$ISO'/>
+      <target dev='sda' bus='usb'/>
+    </disk>"
+else
+  CMDLINE="boot=live components console=tty0 console=ttyS0,115200 bits.auto bits.data-disk=/dev/disk/by-id/virtio-$DATA_SERIAL bits.media=none"
+  SUPPORT_XML="    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='$ISO'/>
+      <target dev='sda' bus='sata'/>
+      <readonly/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='${WORK:?}/data.qcow2'/>
+      <target dev='vdb' bus='virtio'/>
+      <serial>$DATA_SERIAL</serial>
+    </disk>"
+fi
 
 server_log="${WORK:?}/server.log"
 : > "$server_log"
@@ -155,25 +233,14 @@ cat > "${WORK:?}/server.xml" <<EOF
     <type arch='x86_64' machine='q35'>hvm</type>
     <kernel>${WORK:?}/vmlinuz</kernel>
     <initrd>${WORK:?}/initrd.img</initrd>
-    <cmdline>boot=live components console=tty0 console=ttyS0,115200 bits.auto bits.data-disk=/dev/disk/by-id/virtio-$DATA_SERIAL bits.media=none</cmdline>
+    <cmdline>$CMDLINE</cmdline>
   </os>
   <features><acpi/><apic/></features>
   <clock offset='utc'/>
   <on_reboot>destroy</on_reboot>
   <on_crash>destroy</on_crash>
   <devices>
-    <disk type='file' device='cdrom'>
-      <driver name='qemu' type='raw'/>
-      <source file='$ISO'/>
-      <target dev='sda' bus='sata'/>
-      <readonly/>
-    </disk>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
-      <source file='${WORK:?}/data.qcow2'/>
-      <target dev='vdb' bus='virtio'/>
-      <serial>$DATA_SERIAL</serial>
-    </disk>
+$SUPPORT_XML
     <interface type='network'>
       <source network='$NET'/>
       <model type='virtio'/>
@@ -185,8 +252,7 @@ cat > "${WORK:?}/server.xml" <<EOF
   </devices>
 </domain>
 EOF
-"${VIRSH[@]}" define "${WORK:?}/server.xml" >/dev/null
-"${VIRSH[@]}" start "$SERVER" >/dev/null
+demarrer_domaine "$SERVER" "${WORK:?}/server.xml"
 
 log "Installation sans interaction en cours (apt + compilation d'iPXE), délai max ${SERVER_TIMEOUT}s"
 server_ip=""
@@ -279,8 +345,7 @@ client_test() {
   </devices>
 </domain>
 EOF
-  "${VIRSH[@]}" define "${WORK:?}/$name.xml" >/dev/null
-  "${VIRSH[@]}" start "$name" >/dev/null
+  demarrer_domaine "$name" "${WORK:?}/$name.xml"
   log "client $mode démarré, attente du menu iPXE (délai max ${CLIENT_TIMEOUT}s)"
   local cdl=$(( SECONDS + CLIENT_TIMEOUT )) cstart=$SECONDS
   while (( SECONDS < cdl )); do

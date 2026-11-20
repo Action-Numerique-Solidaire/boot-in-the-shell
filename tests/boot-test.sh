@@ -9,12 +9,18 @@
 #
 # Ne demande NI root, NI libvirt : n'importe qui peut le lancer.
 #
-# Usage : tests/boot-test.sh <image.iso> [bios|uefi] [timeout_s]
+# Usage : tests/boot-test.sh <image> [bios|uefi] [timeout_s] [cdrom|disque]
+#
+# « disque » présente l'image comme une clé USB plutôt que comme un CD :
+# c'est ce qu'il faut pour tester une clé fabriquée par
+# tools/creer-cle-usb.sh, dont la table de partitions et le chargeur sont
+# justement ce qu'on veut éprouver.
 set -Eeuo pipefail
 
-ISO="${1:?Usage: boot-test.sh <image.iso> [bios|uefi] [timeout_s]}"
+ISO="${1:?Usage: boot-test.sh <image> [bios|uefi] [timeout_s] [cdrom|disque]}"
 MODE="${2:-bios}"
 TIMEOUT="${3:-900}"
+SUPPORT="${4:-cdrom}"
 MARKER="BITS-LIVE-READY"
 # Motifs d'échec : sans eux, un noyau qui panique ne se distingue pas d'un
 # démarrage lent, et le test attendrait son délai entier pour rien.
@@ -23,6 +29,7 @@ FAILURES='Kernel panic|Attempted to kill init|No init found|Failed to mount|Ente
 [[ -f "$ISO" ]] || { echo "ERREUR : introuvable : $ISO" >&2; exit 1; }
 command -v qemu-system-x86_64 >/dev/null || { echo "ERREUR : qemu-system-x86_64 absent" >&2; exit 1; }
 case "$MODE" in bios|uefi) ;; *) echo "ERREUR : mode inconnu : $MODE (bios|uefi)" >&2; exit 1 ;; esac
+case "$SUPPORT" in cdrom|disque) ;; *) echo "ERREUR : support inconnu : $SUPPORT (cdrom|disque)" >&2; exit 1 ;; esac
 
 workdir="$(mktemp -d)"
 log="$workdir/boot.log"
@@ -31,7 +38,6 @@ trap 'rm -rf "$workdir"' EXIT
 qemu_args=(
   # 2,5 Gio : le live monte son squashfs et travaille dans un overlay en RAM.
   -m 2560 -smp 2
-  -cdrom "$ISO"
   -display none
   -serial "file:$log"
   -no-reboot
@@ -40,6 +46,18 @@ qemu_args=(
   # ajouterait deux minutes à chaque exécution.
   -nic "user,model=virtio-net-pci"
 )
+
+if [[ "$SUPPORT" == "disque" ]]; then
+  # usb-storage derrière un contrôleur xHCI : au plus près d'une vraie clé,
+  # donc le test éprouve le même chemin d'amorçage que le matériel.
+  qemu_args+=(
+    -drive "file=$ISO,format=raw,if=none,id=cle"
+    -device "qemu-xhci,id=xhci"
+    -device "usb-storage,bus=xhci.0,drive=cle"
+  )
+else
+  qemu_args+=(-cdrom "$ISO")
+fi
 
 # L'accélération KVM n'est pas disponible sur un runner GitHub : on retombe sur
 # l'émulation, plus lente mais suffisante pour un test d'amorçage.
