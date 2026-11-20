@@ -10,6 +10,18 @@ disk_real="$(readlink -f "$PXE_DATA_DISK")"
 root_source="$(findmnt -n -o SOURCE /)"
 root_parent="$(lsblk -ndo PKNAME "$root_source" 2>/dev/null || true)"
 [[ "$disk_real" != "$root_source" && "$disk_real" != "/dev/$root_parent" ]] || die "Refus : le disque cible porte le système racine."
+
+# Refuser le disque qui porte le média live. Sans ce garde-fou, pointer ce
+# script sur la clé USB de démarrage détruisait sa partition d'amorçage : il
+# efface le DISQUE entier, pas une partition. Les deux contrôles précédents ne
+# voyaient rien, la clé ne portant pas la racine et son iso9660 n'étant pas
+# monté sous un chemin que « lsblk MOUNTPOINT » signale comme tel.
+live_source="$(findmnt -rn -o SOURCE /run/live/medium 2>/dev/null || findmnt -rn -o SOURCE /lib/live/mount/medium 2>/dev/null || true)"
+if [[ -n "$live_source" ]]; then
+  live_parent="$(lsblk -no PKNAME "$live_source" 2>/dev/null | head -n1 || true)"
+  [[ -z "$live_parent" || "$disk_real" != "/dev/$live_parent" ]] \
+    || die "Refus : $PXE_DATA_DISK porte le média de démarrage. Utiliser une partition dédiée (bits.data-part) ou un autre disque."
+fi
 if lsblk -nrpo MOUNTPOINT "$disk_real" | grep -q '/'; then
   lsblk -o NAME,PATH,SIZE,FSTYPE,MOUNTPOINTS,MODEL,SERIAL "$disk_real" >&2
   die "Une partition du disque cible est montée."
