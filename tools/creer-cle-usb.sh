@@ -139,6 +139,8 @@ if [[ -n "$IPXE_DIR" ]]; then
   [[ -s "$IPXE_DIR/undionly.kpxe" && -s "$IPXE_DIR/snponly.efi" ]] \
     || die "Chargeurs iPXE absents de $IPXE_DIR (lancer tools/construire-ipxe.sh)."
   install -m 0644 "$IPXE_DIR/undionly.kpxe" "$IPXE_DIR/snponly.efi" "$MNT/ipxe-prebuilt/"
+  # Traçabilité : quel commit iPXE a produit ces chargeurs.
+  [[ -s "$IPXE_DIR/VERSION" ]] && install -m 0644 "$IPXE_DIR/VERSION" "$MNT/ipxe-prebuilt/"
   log "Chargeurs iPXE embarqués"
 else
   echo "AVERTISSEMENT : aucun chargeur iPXE embarqué (--ipxe absent)." >&2
