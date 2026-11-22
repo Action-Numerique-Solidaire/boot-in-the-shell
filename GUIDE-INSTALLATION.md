@@ -146,6 +146,22 @@ sudo apt update && sudo apt upgrade
 | `cat /var/log/bits-installation.log` | fin de l'installation (dépôt, paquets) |
 | `systemctl status bits-installation` | si les paquets BITS n'ont pas pu s'installer pendant l'installation (réseau), ils sont réessayés ici toutes les minutes |
 
+### L'installation s'arrête à la détection du réseau
+
+La carte réseau n'est pas reconnue. Sur l'écran d'erreur, `Alt+F2` puis Entrée
+ouvre un terminal :
+
+```bash
+dmesg | grep -iE "firmware|eth"
+```
+
+Une ligne `Direct firmware load for rtl_nic/… failed` signale un firmware
+manquant. La clé embarque ceux des cartes filaires courantes (Realtek,
+Broadcom, Intel…) : c'était le cas d'un Dell OptiPlex 3060 (Realtek RTL8168H,
+`rtl_nic/rtl8168h-2.fw`) avec une clé plus ancienne, sans firmware. Si le
+message persiste avec une clé à jour, signaler le modèle du PC et la ligne
+affichée.
+
 Plus de détails : [PLAYBOOK](03%20-%20prototype-generic/PLAYBOOK.md) (exploitation
 du serveur), [ISO d'amorçage](05%20-%20bootstrap-iso/README.md) (construire la
 clé soi-même).
