@@ -203,12 +203,16 @@ EOF
 # UEFI) et la zone système hybride du mini.iso : rien n'est reconstruit à la
 # main, contrairement à l'ISO live dont l'amorçage UEFI avait cassé.
 log "Construction de $SORTIE"
+install -d -m 0755 "$(dirname "$SORTIE")"
 rm -f "$SORTIE"
-xorriso -indev "$CACHE/mini.iso" -outdev "$SORTIE" \
+if ! xorriso -indev "$CACHE/mini.iso" -outdev "$SORTIE" \
   -map "$TRAVAIL/initrd.gz" /initrd.gz \
   -map "$TRAVAIL/isolinux.cfg" /isolinux.cfg \
   -map "$TRAVAIL/grub.cfg" /boot/grub/grub.cfg \
-  -boot_image any replay >/dev/null 2>&1 || die "xorriso a échoué"
+  -boot_image any replay > "$TRAVAIL/xorriso.log" 2>&1; then
+  tail -15 "$TRAVAIL/xorriso.log" >&2
+  die "xorriso a échoué"
+fi
 
 # Les deux modes d'amorçage doivent être déclarés.
 el="$(xorriso -indev "$SORTIE" -report_el_torito plain 2>/dev/null | grep 'El Torito boot img' || true)"
