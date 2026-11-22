@@ -1,6 +1,10 @@
-name: Publication (ISO live + paquet .deb)
+name: Publication (paquet .deb)
 
-# Produit les livrables et les publie en release.
+# Produit le paquet et le publie en release, une par tag. Le dépôt apt, lui,
+# est publié par depot-apt.yml sur les mêmes tags.
+#
+# L'ISO live n'est plus construite ici : l'installation passe désormais par le
+# paquet apt (voir le README). Son script reste dans « 04 - live-iso ».
 #
 # Déclenchement : un TAG fonctionne depuis N'IMPORTE QUELLE branche, y compris
 # une branche de travail — GitHub exécute le workflow tel qu'il existe au
@@ -17,10 +21,6 @@ on:
         description: "Publier en release (décocher pour un artefact seul)"
         type: boolean
         default: true
-      construire_iso:
-        description: "Construire l'ISO live (décocher pour ne produire que le .deb, ~2 min au lieu de ~40)"
-        type: boolean
-        default: true
   push:
     tags:
       - 'v*'
@@ -31,12 +31,10 @@ permissions:
 
 jobs:
   publier:
-    runs-on: ubuntu-24.04   # doit rester aligné sur DISTRO=noble dans build-iso.sh
-    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write       # nécessaire pour créer la release
-    env:
-      ISO_NAME: boot-in-the-shell-live.iso
 
     steps:
       - uses: actions/checkout@v4
@@ -86,64 +84,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends lintian >/dev/null 2>&1 || true
           command -v lintian >/dev/null && lintian "$deb" || true
 
-      # --- ISO live : la partie longue --------------------------------------
-      # On construit sur /mnt, le disque temporaire du runner (~70 Go), au lieu
-      # de faire de la place sur le disque système. Supprimer dotnet, android,
-      # ghc et boost coûtait 81 s mesurées à chaque exécution, pour un espace
-      # dont on n'a pas besoin si on écrit au bon endroit.
-      - name: Vérifier l'espace de construction
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: |
-          set -Eeuo pipefail
-          [ -d /mnt ] || { echo "::error::/mnt absent sur ce runner"; exit 1; }
-          sudo install -d -m 0755 /mnt/pxe-iso-build
-          libre=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
-          echo "/mnt : ${libre} Go libres"
-          [ "$libre" -ge 15 ] || { echo "::error::moins de 15 Go libres sur /mnt"; exit 1; }
-          df -h / /mnt
-
-      - name: Dépendances de l'hôte
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            debootstrap squashfs-tools xorriso qemu-system-x86 ovmf
-          # isolinux et grub-efi ne sont PAS requis ici : build-iso.sh les
-          # installe dans le chroot et en extrait isohdpfx.bin.
-          # qemu + ovmf servent aux tests d'amorçage qui précèdent la publication.
-
-      - name: Construire l'ISO
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: |
-          cd "04 - live-iso"
-          sudo env PXE_ISO_WORK=/mnt/pxe-iso-build \
-            bash ./build-iso.sh "$GITHUB_WORKSPACE/out/$ISO_NAME"
-          sudo chown "$(id -u):$(id -g)" "$GITHUB_WORKSPACE/out/$ISO_NAME"*
-
-      # Garde-fou : l'ISO a été BIOS seul pendant tout le mois d'octobre, ce qui
-      # la rendait inutilisable sur du matériel post-2012 à CSM désactivé. Une
-      # régression doit échouer ici, pas sur le premier PC d'un bénévole.
-      - name: Vérifier le catalogue El Torito (BIOS + UEFI)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: |
-          xorriso -indev "out/$ISO_NAME" -report_el_torito plain 2>&1 | tee eltorito.txt
-          imgs=$(grep 'El Torito boot img' eltorito.txt || true)
-          echo "$imgs"
-          echo "$imgs" | grep -q 'BIOS' || { echo "::error::entrée El Torito BIOS absente"; exit 1; }
-          echo "$imgs" | grep -q 'UEFI' || { echo "::error::entrée El Torito UEFI absente"; exit 1; }
-
-      # Deuxième garde-fou, complémentaire : El Torito prouve que les deux modes
-      # sont DÉCLARÉS, pas que l'image démarre. Une release ne doit pas pouvoir
-      # contenir une ISO qui panique. Les mêmes scripts tournent chez un
-      # contributeur : tests/run-all.sh <image.iso>.
-      - name: Amorçage réel BIOS
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: tests/boot-test.sh "out/$ISO_NAME" bios 1500
-
-      - name: Amorçage réel UEFI
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.construire_iso }}
-        run: tests/boot-test.sh "out/$ISO_NAME" uefi 1500
-
       # --- empreintes et récapitulatif --------------------------------------
       - name: Empreintes
         run: |
@@ -175,41 +115,31 @@ jobs:
           if [ "$STABLE" = "true" ]; then
             titre="Boot in the Shell $TAG"
             flags=""
+            depot=apt
           else
             titre="Boot in the Shell — essai $TAG"
             flags="--prerelease"
+            depot=apt-test
           fi
-
-          iso_bloc="_ISO non construite pour cet essai._"
-          if [ -f "out/$ISO_NAME" ]; then
-            iso_bloc="| | |
-          |---|---|
-          | Démarrage | BIOS (isolinux) **et** UEFI (GRUB) |
-          | Secure Boot | **non pris en charge** — à désactiver dans le firmware |"
-          fi
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$depot/"
 
           notes=$(cat <<NOTES
           Livrables du serveur PXE « Boot in the Shell ».
 
-          ## Paquet Debian
+          ## Depuis le dépôt apt (mises à jour comprises)
+
+          \`\`\`bash
+          echo "deb [trusted=yes] $base ./" | sudo tee /etc/apt/sources.list.d/bits.list
+          sudo apt update && sudo apt install bits-pxe-server
+          \`\`\`
+
+          ## Depuis ce fichier
 
           \`\`\`bash
           sudo apt install ./$(cd out && ls *.deb)
-          sudoedit /etc/bits-pxe-server/pxe.env
-          sudo bits-pxe-install --prepare-data-disk
           \`\`\`
 
-          Les dépendances (dnsmasq, nginx, nfs-kernel-server, samba…) sont tirées par apt.
-
-          ## ISO live
-
-          $iso_bloc
-
-          \`\`\`bash
-          sudo dd if=$ISO_NAME of=/dev/sdX bs=4M status=progress conv=fsync
-          \`\`\`
-
-          Vérifier \`/dev/sdX\` avec \`lsblk\` au préalable : \`dd\` écrase le disque sans confirmation.
+          Les dépendances (dnsmasq, nginx, nfs-kernel-server…) sont tirées par apt.
 
           ## Vérifier les empreintes
 
@@ -243,4 +173,3 @@ jobs:
           name: boot-in-the-shell-livrables
           path: out/
           retention-days: 14
-          compression-level: 0

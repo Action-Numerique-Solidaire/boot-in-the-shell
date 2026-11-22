@@ -9,6 +9,9 @@ name: Tests (amorçage réel de l'ISO)
 # Les mêmes scripts tournent à l'identique chez un contributeur :
 #   tests/run-all.sh <image.iso>
 #
+# L'ISO live n'étant plus le mode d'installation, ce workflow ne se déclenche
+# plus que sur une modification de l'ISO elle-même ou de son test d'amorçage.
+#
 # Ce workflow est optimisé pour la vitesse, contrairement à publication.yml :
 # il réutilise un chroot mis en cache. Une image PUBLIÉE doit être construite
 # de zéro — d'où l'absence de cache dans publication.yml.
@@ -16,14 +19,12 @@ on:
   push:
     paths:
       - '04 - live-iso/**'
-      - '03 - prototype-generic/**'
-      - 'tests/**'
+      - 'tests/boot-test.sh'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
       - '04 - live-iso/**'
-      - '03 - prototype-generic/**'
-      - 'tests/**'
+      - 'tests/boot-test.sh'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
     inputs:
