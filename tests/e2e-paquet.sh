@@ -319,6 +319,30 @@ if (( WEB )); then
   curl -fsS --max-time 10 "http://$server_ip/" | grep -qF "<title>Boot in the Shell</title>" \
     || die "Page d'accueil de l'interface injoignable sur le port 80"
   api() { curl -fsS --max-time 30 -H "X-BITS-Requete: 1" -H "Content-Type: application/json" "$@"; }
+  champ() {  # champ <clé python> : lit une valeur dans /api/etat
+    curl -fsS --max-time 10 "http://$server_ip/api/etat" 2>/dev/null \
+      | python3 -c 'import json, sys; d = json.load(sys.stdin); k = next(m for m in d["medias"] if m["id"] == "killbit"); print(eval(sys.argv[1]))' "$1" 2>/dev/null || echo "?"
+  }
+
+  # « Télécharger » : l'image est récupérée et vérifiée, rien n'est publié.
+  t0=$SECONDS
+  api -X POST -d '{}' "http://$server_ip/api/media/killbit/telecharger" >/dev/null \
+    || die "Téléchargement de Killbit refusé par l'interface"
+  until [[ "$(champ 'd["publication"]["en_cours"]')" == False && "$(champ 'k["telecharge"] is not None')" == True ]]; do
+    (( SECONDS - t0 < SERVER_TIMEOUT )) || die "Téléchargement de Killbit non terminé"
+    sleep 3
+  done
+  echo "  Killbit téléchargé par l'interface en $(( SECONDS - t0 ))s, sans publication"
+  [[ "$(champ 'k["active"]')" == False ]] || die "« Télécharger » a activé Killbit"
+  if curl -fsS --max-time 10 "http://$server_ip/pxe/menu.ipxe" 2>/dev/null | grep -q '^item killbit '; then
+    die "« Télécharger » a publié Killbit dans le menu PXE"
+  fi
+  taille_srv="$("${SSH[@]}" 'stat -c %s /srv/bits-data/downloads/killbit-live.iso')"
+  taille_http="$(curl -fsSI --max-time 10 "http://$server_ip/telechargements/killbit-live.iso" | awk 'tolower($1) == "content-length:" { print $2 + 0 }')"
+  [[ -n "$taille_http" && "$taille_http" == "$taille_srv" ]] \
+    || die "Image non récupérable par /telechargements/ (HTTP $taille_http octets, serveur $taille_srv)"
+  echo "  image récupérable par le navigateur : /telechargements/killbit-live.iso ($taille_http octets)"
+
   api -X POST -d '{"active": true}' "http://$server_ip/api/media/killbit" >/dev/null \
     || die "Activation de Killbit refusée par l'interface"
   echo "  Killbit activé par l'interface"

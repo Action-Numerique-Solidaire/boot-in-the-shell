@@ -11,7 +11,8 @@ les seules que /etc/sudoers.d/bits-web lui accorde :
 
     bitsctl media enable <id>
     bitsctl media disable <id>
-    systemctl start --no-block bits-sync.service
+    bitsctl media download --arriere-plan <id>     (télécharger sans publier)
+    systemctl start --no-block bits-sync.service   (publier)
 
 La publication passe par bits-sync.service, la même unité qu'au démarrage,
 et non par un processus fils : elle tourne ainsi dans sa propre unité, et un
@@ -148,6 +149,18 @@ def reseau():
     return {"interface": interface, "adresse": None, "ip": None}
 
 
+def operation_en_cours():
+    """Nature de l'opération en cours, d'après le dernier journal ouvert :
+    publication, ou téléchargement d'une image (et laquelle)."""
+    if not publication_en_cours():
+        return None
+    nom = os.path.basename(os.path.realpath(os.path.join(LOG_DIR, "derniere.log")))
+    m = re.match(r"telechargement-([a-z0-9][a-z0-9._-]*)-\d{8}-\d{6}\.log$", nom)
+    if m:
+        return {"type": "téléchargement", "id": m.group(1)}
+    return {"type": "publication", "id": None}
+
+
 def derniere_publication():
     lien = os.path.join(LOG_DIR, "apply-latest.log")
     try:
@@ -191,7 +204,7 @@ def etat():
         else:
             e = "inactif"
         medias.append({
-            **{k: m[k] for k in ("id", "type", "libelle", "active", "disponible")},
+            **{k: m[k] for k in ("id", "type", "fichier", "libelle", "active", "disponible")},
             "etat": e,
             "telecharge": taille(chemin),
             # Fichier partiel : téléchargement en cours (ou interrompu).
@@ -204,13 +217,20 @@ def etat():
         libre = None
     return {
         "serveur": {**reseau(), "donnees": DATA_DIR, "libre": libre},
-        "publication": {"en_cours": publication_en_cours(), "derniere": derniere_publication()},
+        "publication": {
+            "en_cours": publication_en_cours(),
+            "operation": operation_en_cours(),
+            "derniere": derniere_publication(),
+        },
         "medias": medias,
     }
 
 
 def journal(depuis):
-    lien = os.path.join(LOG_DIR, "apply-latest.log")
+    # Journal de la dernière opération, publication ou téléchargement.
+    lien = os.path.join(LOG_DIR, "derniere.log")
+    if not os.path.exists(lien):
+        lien = os.path.join(LOG_DIR, "apply-latest.log")
     try:
         chemin = os.path.realpath(lien)
         fin = os.path.getsize(chemin)
@@ -306,6 +326,22 @@ class Gestionnaire(BaseHTTPRequestHandler):
             corps = json.loads(self.rfile.read(longueur) or b"{}")
         except ValueError:
             return self._json(HTTPStatus.BAD_REQUEST, {"erreur": "JSON invalide"})
+
+        m = re.fullmatch(r"/api/media/([a-z0-9][a-z0-9._-]*)/telecharger", url.path)
+        if m:
+            # Télécharger et vérifier l'image sur le serveur, sans la publier :
+            # le menu PXE ne change pas.
+            with _apply_lock:
+                if publication_en_cours():
+                    return self._json(HTTPStatus.CONFLICT, {"erreur": "une opération est déjà en cours"})
+                code, sortie = bitsctl("media", "download", "--arriere-plan", m.group(1))
+                if code != 0:
+                    return self._json(HTTPStatus.BAD_REQUEST, {"erreur": sortie})
+                for _ in range(20):
+                    if publication_en_cours():
+                        break
+                    time.sleep(0.1)
+            return self._json(HTTPStatus.ACCEPTED, {"message": sortie})
 
         m = re.fullmatch(r"/api/media/([a-z0-9][a-z0-9._-]*)", url.path)
         if m:

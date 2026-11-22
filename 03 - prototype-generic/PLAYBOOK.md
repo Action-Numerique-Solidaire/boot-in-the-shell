@@ -46,10 +46,19 @@ sudo apt install bits-web
 ```
 
 Elle s'ouvre depuis n'importe quel poste du réseau, à l'adresse
-`http://<adresse du serveur>/`, affichée aussi sur la console du serveur. Elle
-liste les images du catalogue, permet d'activer ou de désactiver chacune, lance
-la publication et en affiche le journal en direct. Elle fait la même chose que
-les commandes `bitsctl` ci-dessous.
+`http://<adresse du serveur>/`, affichée aussi sur la console du serveur. Pour
+chaque image du catalogue :
+
+- **Télécharger** : récupère et vérifie l'image sur le serveur, **sans changer
+  le menu PXE**. Pour préparer à l'avance une image de plusieurs gigaoctets ;
+- l'interrupteur l'active ou la désactive, puis **Appliquer au PXE** publie
+  (et télécharge ce qui manque) ;
+- **Récupérer le fichier** : une image déjà téléchargée se récupère depuis le
+  navigateur, sous `http://<adresse>/telechargements/<fichier>` — pour graver
+  une clé sur un autre poste, par exemple.
+
+Le journal de l'opération en cours s'affiche en direct. L'interface fait la
+même chose que les commandes `bitsctl` ci-dessous.
 
 - Elle prend la place du site `default` de nginx, s'il n'a pas été modifié ;
   il est rétabli à la désinstallation. Un site `default` modifié est laissé en
@@ -67,6 +76,7 @@ les commandes `bitsctl` ci-dessous.
 bitsctl media list
 sudo bitsctl media enable killbit
 sudo bitsctl media enable ubuntu
+sudo bitsctl media download zorin    # télécharger sans publier
 ```
 
 Le catalogue est `/etc/bits-pxe-server/media.conf`. Chaque ligne :
@@ -104,7 +114,9 @@ en 3. Une image désactivée est retirée du menu, démontée et n'est plus
 exportée ; son fichier téléchargé est gardé dans `/srv/bits-data/downloads`.
 
 Après la première publication, `bits-sync.service` rejoue la publication à
-chaque démarrage.
+chaque démarrage. Il attend d'abord qu'une interface ait une adresse IPv4
+(jusqu'à 2 min : avec ifupdown, `network-online` n'attend pas une interface
+`allow-hotplug`), et en cas d'échec il réessaie toutes les 30 s.
 
 Le menu n'a **ni choix par défaut ni délai** : un poste démarré sur le réseau
 par erreur attend qu'on choisisse, et ne lance jamais seul une installation

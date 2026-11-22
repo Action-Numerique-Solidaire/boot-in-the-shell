@@ -1,4 +1,5 @@
 # bits-web : les seules commandes de l'interface web, sans mot de passe.
-# Activer ou désactiver une image (bitsctl vérifie l'identifiant), et lancer
-# la publication par l'unité qui la fait aussi au démarrage.
-bits-web ALL=(root) NOPASSWD: /usr/sbin/bitsctl media enable *, /usr/sbin/bitsctl media disable *, /usr/bin/systemctl start --no-block bits-sync.service
+# Activer, désactiver ou télécharger une image (bitsctl vérifie l'identifiant
+# et refuse tout argument en trop), et lancer la publication par l'unité qui
+# la fait aussi au démarrage.
+bits-web ALL=(root) NOPASSWD: /usr/sbin/bitsctl media enable *, /usr/sbin/bitsctl media disable *, /usr/sbin/bitsctl media download --arriere-plan *, /usr/bin/systemctl start --no-block bits-sync.service

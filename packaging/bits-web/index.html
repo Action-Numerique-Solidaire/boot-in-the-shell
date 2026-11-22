@@ -54,6 +54,10 @@
   .media .nom { font-weight: 600; }
   .media .details { grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
                     color: var(--discret); font-size: 13px; }
+  .media .actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+                    margin-top: 6px; font-size: 13px; }
+  .media .actions button { padding: 4px 10px; font-size: 13px; }
+  .media .actions a { color: var(--accent); }
   .pastille { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
               background: var(--neutre-fond); color: var(--discret); }
   .pastille.publie { background: var(--ok-fond); color: var(--ok); }
@@ -95,19 +99,21 @@
     <div class="statut"><span class="rond" id="rond"></span>
       <div><div id="statut">Chargement…</div><div class="message" id="message"></div></div>
     </div>
-    <button class="primaire" id="appliquer" disabled>Appliquer</button>
+    <button class="primaire" id="appliquer" disabled>Appliquer au PXE</button>
   </section>
 
   <section class="medias" id="medias" aria-label="Images proposées par le serveur PXE"></section>
   <p class="erreur-globale" id="erreur" role="alert"></p>
 
   <details id="volet-journal">
-    <summary>Journal de publication <span class="serveur" id="journal-nom"></span></summary>
+    <summary>Journal <span class="serveur" id="journal-nom"></span></summary>
     <pre id="journal">Aucun journal pour le moment.</pre>
   </details>
 
-  <p class="aide">Activer une image puis « Appliquer » : elle est téléchargée, vérifiée, puis ajoutée au
-    menu de démarrage réseau. Désactivée, elle en est retirée ; le fichier téléchargé est conservé.
+  <p class="aide">« Télécharger » récupère et vérifie une image sur le serveur sans changer le menu de
+    démarrage réseau : pratique pour préparer à l'avance une image de plusieurs gigaoctets.
+    Activer une image puis « Appliquer au PXE » : elle est téléchargée si besoin, vérifiée, puis
+    ajoutée au menu. Désactivée, elle en est retirée ; le fichier téléchargé est conservé.
     Le menu n'a pas de choix par défaut : un poste démarré sur le réseau attend qu'on choisisse.</p>
 </main>
 
@@ -133,6 +139,7 @@ const TYPES = { "casper-iso": "Ubuntu / Casper", "debian-live-iso": "Debian live
 
 function rendreMedias(etat) {
   const enCours = etat.publication.en_cours;
+  const op = etat.publication.operation;
   const conteneur = $("medias");
   conteneur.replaceChildren();
   for (const m of etat.medias) {
@@ -161,6 +168,27 @@ function rendreMedias(etat) {
     caseAc.addEventListener("change", () => basculer(m.id, caseAc.checked, caseAc));
     inter.append(caseAc, document.createElement("span"));
     carte.append(nom, inter, details);
+
+    // Télécharger sans publier, ou récupérer le fichier déjà téléchargé.
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    if (m.telecharge != null) {
+      const lien = document.createElement("a");
+      lien.href = "/telechargements/" + encodeURIComponent(m.fichier);
+      lien.setAttribute("download", m.fichier);
+      lien.textContent = "Récupérer le fichier (" + octets(m.telecharge) + ")";
+      actions.append(lien);
+    } else if (m.disponible) {
+      const bouton = document.createElement("button");
+      const enCoursIci = op && op.type === "téléchargement" && op.id === m.id;
+      bouton.textContent = enCoursIci ? "Téléchargement…" : "Télécharger";
+      bouton.disabled = enCours;
+      bouton.title = "Récupérer et vérifier l'image sur le serveur, sans changer le menu PXE";
+      bouton.setAttribute("aria-label", "Télécharger " + m.libelle + " sur le serveur, sans publier");
+      bouton.addEventListener("click", () => telecharger(m.id, bouton));
+      actions.append(bouton);
+    }
+    if (actions.childElementCount) carte.append(actions);
     conteneur.append(carte);
   }
 }
@@ -182,7 +210,12 @@ function rendre(etat) {
   const aPublier = etat.medias.some((m) => m.etat === "à publier" || m.etat === "à retirer");
   let rond = "", statut, message = "";
   if (p.en_cours) {
-    rond = "actif"; statut = "Publication en cours…";
+    rond = "actif";
+    const op = p.operation || {};
+    const cible = etat.medias.find((m) => m.id === op.id);
+    statut = op.type === "téléchargement"
+      ? "Téléchargement de " + (cible ? cible.libelle : op.id) + " (sans publication)…"
+      : "Publication en cours…";
     const enTelech = etat.medias.find((m) => m.en_telechargement != null);
     if (enTelech) message = enTelech.libelle + " : " + octets(enTelech.en_telechargement) + " téléchargés";
   } else if (aPublier) {
@@ -201,7 +234,7 @@ function rendre(etat) {
   $("statut").textContent = statut;
   $("message").textContent = message;
   $("appliquer").disabled = p.en_cours;
-  $("appliquer").textContent = p.en_cours ? "Publication…" : "Appliquer";
+  $("appliquer").textContent = p.en_cours ? "Opération en cours…" : "Appliquer au PXE";
   rendreMedias(etat);
 }
 
@@ -247,6 +280,17 @@ async function basculer(id, active, caseAc) {
   caseAc.disabled = true;
   try { await poster("/api/media/" + encodeURIComponent(id), { active }); $("erreur").textContent = ""; }
   catch (e) { $("erreur").textContent = e.message; caseAc.checked = !active; }
+  const r = await fetch("/api/etat", { cache: "no-store" }); rendre(await r.json());
+}
+
+async function telecharger(id, bouton) {
+  bouton.disabled = true;
+  try {
+    await poster("/api/media/" + encodeURIComponent(id) + "/telecharger");
+    journalPos = 0; journalTexte = ""; journalNom = null;
+    $("volet-journal").open = true;
+    $("erreur").textContent = "";
+  } catch (e) { $("erreur").textContent = e.message; }
   const r = await fetch("/api/etat", { cache: "no-store" }); rendre(await r.json());
 }
 

@@ -10,9 +10,13 @@
 #   bitsctl media list             catalogue et état de chaque média
 #   bitsctl media enable <id>      activer un média (pris en compte à apply)
 #   bitsctl media disable <id>     désactiver un média (idem)
-#   bitsctl log [-f]               journal de la dernière publication
+#   bitsctl media download <id>    télécharger et vérifier un média, activé ou
+#                                  non, SANS le publier ; --arriere-plan le
+#                                  lance dans bits-telechargement@<id>.service
+#   bitsctl log [-f]               journal de la dernière opération
 #
-# Les journaux de publication sont gardés dans /var/log/bits/.
+# Les journaux sont gardés dans /var/log/bits/ ; derniere.log désigne celui de
+# la dernière opération (publication ou téléchargement).
 set -Eeuo pipefail
 
 SCRIPTS="${BITS_SCRIPTS:-/usr/share/bits-pxe-server/scripts}"
@@ -29,7 +33,7 @@ LOCK=/run/bits-apply.lock
 # shellcheck source=/dev/null
 source "$SCRIPTS/lib/common.sh"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 etat_service() {
   local s="$1" a e
@@ -85,17 +89,22 @@ liste_catalogue() {
     !($2 in vu) { $1 = "no"; print }' "$PXE_MEDIA_FILE" "$([[ -f "$CATALOGUE" ]] && echo "$CATALOGUE" || echo /dev/null)"
 }
 
-cmd_media_set() {
-  local id="$1" val="$2" tmp ligne
-  require_root
-  safe_id "$id"
-  # Absente du catalogue local mais connue du catalogue de référence : on
-  # ajoute sa ligne, désactivée, avant de l'activer.
+# Absent du catalogue local mais connu du catalogue de référence : on ajoute
+# sa ligne, désactivée.
+assurer_ligne() {
+  local id="$1" ligne
   if ! awk -F '|' -v id="$id" '$0 !~ /^[[:space:]]*#/ && NF >= 7 && $2 == id { f = 1 } END { exit !f }' "$PXE_MEDIA_FILE"; then
     ligne="$(awk -F '|' -v OFS='|' -v id="$id" '$0 !~ /^[[:space:]]*#/ && NF >= 7 && $2 == id { $1 = "no"; print; exit }' "$CATALOGUE" 2>/dev/null || true)"
     [[ -n "$ligne" ]] || die "Média inconnu : $id (ni dans $PXE_MEDIA_FILE ni dans $CATALOGUE)"
     printf '%s\n' "$ligne" >> "$PXE_MEDIA_FILE"
   fi
+}
+
+cmd_media_set() {
+  local id="$1" val="$2" tmp
+  require_root
+  safe_id "$id"
+  assurer_ligne "$id"
   tmp="$(mktemp "$PXE_MEDIA_FILE.XXXXXX")"
   if ! awk -F '|' -v OFS='|' -v id="$id" -v val="$val" '
       $0 !~ /^[[:space:]]*#/ && NF >= 7 && $2 == id { $1 = val; found = 1 }
@@ -109,14 +118,59 @@ cmd_media_set() {
   echo "$id : $([[ $val == yes ]] && echo activé || echo désactivé). Prise en compte : sudo bitsctl apply"
 }
 
+# Une seule opération à la fois, publication ou téléchargement : elles écrivent
+# dans les mêmes fichiers. Le verrou est aussi ce que lit l'interface web pour
+# savoir qu'une opération est en cours.
+prendre_verrou() {
+  exec 9>"$LOCK"
+  flock -n 9 || die "Une opération (publication ou téléchargement) est déjà en cours."
+}
+
+nouveau_journal() {
+  local logf
+  install -d -m 0755 "$LOG_DIR"
+  logf="$LOG_DIR/$1-$(date '+%Y%m%d-%H%M%S').log"
+  : > "$logf"
+  ln -sfn "$(basename "$logf")" "$LOG_DIR/derniere.log"
+  printf '%s' "$logf"
+}
+
+cmd_download() {
+  local id="$1" logf rc
+  require_root
+  safe_id "$id"
+  assurer_ligne "$id"
+  prendre_verrou
+  logf="$(nouveau_journal "telechargement-$id")"
+  set +e
+  "$SCRIPTS/40-download-media.sh" --seulement "$id" 2>&1 | tee -a "$logf"
+  rc=${PIPESTATUS[0]}
+  set -e
+  find "$LOG_DIR" -maxdepth 1 -name 'telechargement-*.log' | sort | head -n -30 | xargs -r rm -f
+  if [[ $rc -ne 0 ]]; then
+    echo "ÉCHEC du téléchargement de $id (code $rc). Journal : $logf" | tee -a "$logf"
+    return "$rc"
+  fi
+  echo "Téléchargement réussi : $id (non publié). Journal : $logf" | tee -a "$logf"
+}
+
+cmd_download_arriere_plan() {
+  local id="$1"
+  require_root
+  safe_id "$id"
+  assurer_ligne "$id"
+  # Dans sa propre unité : le téléchargement va au bout même si l'appelant
+  # (l'interface web) redémarre entre-temps.
+  systemctl start --no-block "bits-telechargement@$id.service"
+  echo "Téléchargement de $id lancé : bitsctl log -f"
+}
+
 cmd_apply() {
   require_root
-  install -d -m 0755 "$LOG_DIR"
-  exec 9>"$LOCK"
-  flock -n 9 || die "Une publication est déjà en cours."
+  prendre_verrou
 
   local logf rc ecartes=0
-  logf="$LOG_DIR/apply-$(date '+%Y%m%d-%H%M%S').log"
+  logf="$(nouveau_journal apply)"
   ln -sfn "$(basename "$logf")" "$LOG_DIR/apply-latest.log"
 
   set +e
@@ -164,11 +218,13 @@ cmd_disable() {
 }
 
 cmd_log() {
-  [[ -e "$LOG_DIR/apply-latest.log" ]] || die "Aucun journal de publication dans $LOG_DIR."
+  local j="$LOG_DIR/derniere.log"
+  [[ -e "$j" ]] || j="$LOG_DIR/apply-latest.log"
+  [[ -e "$j" ]] || die "Aucun journal dans $LOG_DIR."
   if [[ "${1:-}" == -f ]]; then
-    exec tail -n +1 -F "$LOG_DIR/apply-latest.log"
+    exec tail -n +1 -F "$j"
   fi
-  cat "$LOG_DIR/apply-latest.log"
+  cat "$j"
 }
 
 case "${1:-}" in
@@ -178,11 +234,17 @@ case "${1:-}" in
   disable) cmd_disable ;;
   log)     shift; cmd_log "$@" ;;
   media)
-    case "${2:-}" in
-      list|"")  cmd_media_list ;;
-      enable)   cmd_media_set "${3:?identifiant attendu}" yes ;;
-      disable)  cmd_media_set "${3:?identifiant attendu}" no ;;
-      *)        usage ;;
+    # Nombre d'arguments exact : sudo accorde « bitsctl media … * » à
+    # l'interface web, un argument en trop doit être refusé, pas ignoré.
+    case "${2:-}:$#" in
+      list:2|:1)                 cmd_media_list ;;
+      enable:3)                  cmd_media_set "$3" yes ;;
+      disable:3)                 cmd_media_set "$3" no ;;
+      download:3)                cmd_download "$3" ;;
+      download:4)
+        [[ "$3" == --arriere-plan ]] || usage
+        cmd_download_arriere_plan "$4" ;;
+      *)                         usage ;;
     esac
     ;;
   -h|--help|help) usage ;;

@@ -9,7 +9,9 @@
 # Contrôles :
 #   1. apt installe le paquet et ses dépendances ;
 #   2. l'installation n'active rien (aucun service, aucun dnsmasq) ;
-#   3. bitsctl : media list / enable / disable modifient le catalogue ;
+#   3. bitsctl : media list / enable / disable modifient le catalogue ; un
+#      argument en trop est refusé ; media download télécharge une image sans
+#      la publier ;
 #   4. la validation déduit le réseau sans aucune configuration ;
 #   5. l'étape iPXE prend les chargeurs du paquet ipxe ;
 #   6. purge : l'état est retiré, les images téléchargées sont gardées.
@@ -17,7 +19,8 @@
 # Avec bits-web :
 #   7. le site nginx remplace « default », la configuration est valide ;
 #   8. le service répond, en direct et derrière nginx, sous son utilisateur ;
-#   9. sudo lui accorde l'activation d'une image, et refuse « bitsctl apply » ;
+#   9. sudo lui accorde l'activation et le téléchargement d'une image, et
+#      refuse « bitsctl apply » ; nginx sert les images téléchargées ;
 #  10. un POST sans l'en-tête X-BITS-Requete est refusé.
 #
 # Demande docker et l'image debian:trixie.
@@ -69,7 +72,23 @@ grep -E "^no\|killbit\|" /etc/bits-pxe-server/media.conf >/dev/null || fail "3 :
 if bitsctl media enable inexistant 2>/dev/null; then fail "3 : un média inconnu est accepté"; fi
 # Le catalogue est un conffile : bitsctl ne doit pas changer ses droits.
 [[ "$(stat -c %a /etc/bits-pxe-server/media.conf)" == 644 ]] || fail "3 : droits du catalogue modifiés"
-echo "OK 3 : media list / enable / disable"
+# sudo accorde « bitsctl media … * » à l interface web : un argument en trop
+# doit être refusé, pas ignoré.
+if bitsctl media enable killbit autre >/dev/null 2>&1; then fail "3 : argument en trop accepté"; fi
+grep -E "^no\|killbit\|" /etc/bits-pxe-server/media.conf >/dev/null || fail "3 : l appel refusé a modifié le catalogue"
+echo "OK 3 : media list / enable / disable, arguments stricts"
+
+# Télécharger sans publier : une image fictive servie en file://, pour ne
+# dépendre d aucun réseau.
+head -c 1048576 /dev/urandom > /tmp/essai.iso
+sha=$(sha256sum /tmp/essai.iso | cut -d" " -f1)
+echo "no|essai|debian-live-iso|essai.iso|file:///tmp/essai.iso|$sha|Essai" >> /etc/bits-pxe-server/media.conf
+bitsctl media download essai > /tmp/dl.log 2>&1 || { cat /tmp/dl.log; fail "3 : media download"; }
+cmp -s /tmp/essai.iso /srv/bits-data/downloads/essai.iso || fail "3 : image non téléchargée"
+grep -E "^no\|essai\|" /etc/bits-pxe-server/media.conf >/dev/null || fail "3 : media download a activé l image"
+[[ ! -s /var/lib/bits/media-prets && ! -e /var/lib/bits/media-publies ]] || fail "3 : media download a touché l état de publication"
+[[ "$(readlink /var/log/bits/derniere.log)" == telechargement-essai-* ]] || fail "3 : journal du téléchargement"
+echo "OK 3 : media download télécharge et vérifie sans publier"
 
 # 4. réseau déduit, sans toucher pxe.env
 export PXE_CONFIG_FILE=/etc/bits-pxe-server/pxe.env PXE_MEDIA_FILE=/etc/bits-pxe-server/media.conf
@@ -113,7 +132,14 @@ if [[ -f /tmp/bits-web.deb ]]; then
   if runuser -u bits-web -- sudo -n /usr/sbin/bitsctl apply >/dev/null 2>&1; then fail "9 : sudo accorde bitsctl apply"; fi
   if runuser -u bits-web -- sudo -n /bin/bash -c true >/dev/null 2>&1; then fail "9 : sudo accorde un shell"; fi
   runuser -u bits-web -- sudo -n -l /usr/bin/systemctl start --no-block bits-sync.service >/dev/null || fail "9 : lancement de bits-sync non accordé"
-  echo "OK 9 : sudo n accorde que l activation et le lancement de bits-sync"
+  runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download --arriere-plan killbit >/dev/null || fail "9 : téléchargement non accordé"
+  if runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download killbit >/dev/null 2>&1; then fail "9 : téléchargement au premier plan accordé"; fi
+  echo "OK 9 : sudo n accorde que l activation, le téléchargement et le lancement de bits-sync"
+  curl -fsS -o /tmp/recup.iso http://127.0.0.1/telechargements/essai.iso || fail "9 : /telechargements/ non servi"
+  cmp -s /tmp/essai.iso /tmp/recup.iso || fail "9 : fichier récupéré différent"
+  code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/telechargements/)
+  [[ "$code" == 403 || "$code" == 404 ]] || fail "9 : liste du répertoire des images exposée (code $code)"
+  echo "OK 9 : images téléchargées récupérables, sans liste du répertoire"
 
   # 10. garde CSRF
   code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -d "{\"active\": false}" http://127.0.0.1/api/media/killbit)

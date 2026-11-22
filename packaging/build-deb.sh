@@ -54,6 +54,7 @@ install -m 0644 "$PROTO_SRC/config/boot.ipxe"  "$STAGE/usr/share/$PKG/config/"
 install -m 0755 "$PKG_SRC/bitsctl"               "$STAGE/usr/sbin/bitsctl"
 install -m 0644 "$PKG_SRC/bits-dnsmasq.service"  "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PKG_SRC/bits-sync.service"     "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PKG_SRC/bits-telechargement@.service" "$STAGE/usr/lib/systemd/system/"
 
 # La configuration part dans /etc en conffiles : dpkg préservera les
 # modifications de l'administrateur lors d'une mise à jour.

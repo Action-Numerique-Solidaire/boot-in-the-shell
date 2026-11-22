@@ -1,0 +1,10 @@
+[Unit]
+Description=BITS : téléchargement de l'image %i, sans publication
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/bitsctl media download %i
+# Une image Ubuntu fait plusieurs gigaoctets ; rien n'attend ce service.
+TimeoutStartSec=0

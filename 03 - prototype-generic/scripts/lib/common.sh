@@ -68,6 +68,12 @@ require_data_dir() {
   install -d -m 0755 "$PXE_DATA_MOUNT" "$PXE_DATA_MOUNT/downloads"
 }
 
+# Toutes les lignes du catalogue, activées ou non.
+catalogue_lines() {
+  [[ -f "$MEDIA_FILE" ]] || die "Catalogue absent : $MEDIA_FILE"
+  awk -F '|' 'NF >= 7 && $0 !~ /^[[:space:]]*#/ {print}' "$MEDIA_FILE"
+}
+
 enabled_media() {
   [[ -f "$MEDIA_FILE" ]] || die "Catalogue absent : $MEDIA_FILE"
   awk -F '|' 'NF >= 7 && $1 == "yes" && $0 !~ /^[[:space:]]*#/ {print}' "$MEDIA_FILE"

@@ -1,9 +1,24 @@
 #!/usr/bin/env bash
+# Télécharge et vérifie les images activées, et note lesquelles sont prêtes à
+# publier.
+#
+#   --seulement <id>...   télécharge seulement ces images, activées ou non,
+#                         sans toucher à l'état de publication : c'est le
+#                         bouton « Télécharger » de l'interface web, qui
+#                         prépare une image sans changer le menu PXE.
 set -Eeuo pipefail
 source "$(dirname "$0")/lib/common.sh"
 require_root
 load_config
 require_data_dir
+
+SEULEMENT=()
+if [[ "${1:-}" == --seulement ]]; then
+  shift
+  [[ $# -gt 0 ]] || die "--seulement attend au moins un identifiant."
+  for id in "$@"; do safe_id "$id"; done
+  SEULEMENT=("$@")
+fi
 
 download_dir="$PXE_DATA_MOUNT/downloads"
 ready_file="$PXE_STATE_DIR/media-prets"
@@ -30,8 +45,27 @@ expected_sha() {
     | awk -v n="$remote_name" '{ f = $2; sub(/^\*/, "", f); sub(/.*\//, "", f) } f == n { print tolower($1); exit }'
 }
 
+source_lignes() {
+  if [[ ${#SEULEMENT[@]} -eq 0 ]]; then
+    enabled_media
+    return
+  fi
+  local id trouve
+  for id in "${SEULEMENT[@]}"; do
+    trouve="$(catalogue_lines | awk -F '|' -v id="$id" '$2 == id { print; exit }')"
+    [[ -n "$trouve" ]] || die "Média inconnu dans $MEDIA_FILE : $id"
+    printf '%s\n' "$trouve"
+  done
+}
+
 while IFS='|' read -r enabled id _ filename url sha label; do
-  [[ "$enabled" == "yes" ]] || continue
+  if [[ ${#SEULEMENT[@]} -eq 0 ]]; then
+    [[ "$enabled" == "yes" ]] || continue
+  else
+    # Image non activée : 00-validate-config.sh ne l'a pas contrôlée.
+    [[ "$filename" != */* && -n "$filename" ]] || die "Nom de fichier invalide pour $id"
+    [[ "$url" =~ ^(https://|file:///) && "$url" != *REPLACE_* ]] || die "URL à renseigner pour $id."
+  fi
   target="$download_dir/$filename"
   log "$label"
 
@@ -79,7 +113,17 @@ while IFS='|' read -r enabled id _ filename url sha label; do
   printf '%s' "$expected" > "$target.sha256"
   echo "Téléchargé et vérifié : $filename"
   ready+=("$id")
-done < <(enabled_media)
+done < <(source_lignes)
+
+if [[ ${#SEULEMENT[@]} -gt 0 ]]; then
+  echo
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    echo "Téléchargement en échec : ${failed[*]}"
+    exit 1
+  fi
+  echo "Téléchargé et vérifié, non publié : ${ready[*]}"
+  exit 0
+fi
 
 # Une ligne par identifiant ; un tableau vide donne un fichier vide, pas une
 # ligne vide.

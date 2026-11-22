@@ -5,12 +5,19 @@ After=network-online.target nginx.service nfs-server.service
 
 [Service]
 Type=oneshot
+# network-online n'attend pas une interface « allow-hotplug » d'ifupdown (cas
+# d'un Debian installé par l'installateur) : on attend l'adresse IPv4.
+ExecStartPre=/usr/share/bits-pxe-server/scripts/attendre-reseau.sh 120
 ExecStart=/usr/sbin/bitsctl apply
 # Un téléchargement d'image peut durer longtemps ; rien n'attend ce service.
 TimeoutStartSec=0
 # 3 : publié, mais un média au moins a été écarté (téléchargement ou empreinte
 # en échec). Le serveur sert les autres : ce n'est pas une panne.
 SuccessExitStatus=3
+# Échec (réseau tardif, miroir injoignable…) : nouvel essai, plutôt que de
+# laisser le serveur PXE arrêté jusqu'au prochain démarrage.
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
