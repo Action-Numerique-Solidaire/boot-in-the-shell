@@ -115,9 +115,14 @@ essai() {
     firmware="<loader readonly='yes' type='pflash'>$ovmf_code</loader>
     <nvram template='$ovmf_vars'>$WORK/iso-$mode-vars.fd</nvram>"
   fi
-  # Disque interne en premier dans l'ordre d'amorçage : vierge au départ, le
-  # firmware passe à la clé ; installé, il démarre dessus. C'est l'ordre d'un
-  # PC réel où l'on a branché la clé sans toucher au firmware.
+  # Comme une personne : démarrer sur la clé, puis la retirer quand
+  # l'installateur redémarre la machine. La clé est donc en premier, et la VM
+  # s'arrête au redémarrage de fin d'installation (on_reboot destroy) ; le
+  # test détache alors la clé et relance sur le disque interne.
+  #
+  # « Disque interne d'abord, clé ensuite » ne marche pas en BIOS : SeaBIOS
+  # regroupe tous les disques durs sous une seule entrée et ne tente que le
+  # premier, la clé n'était jamais essayée (« No bootable device »).
   cat > "$WORK/iso-$mode.xml" <<EOF
 <domain type='$DOMTYPE'>
   <name>$nom</name>
@@ -129,20 +134,20 @@ essai() {
   </os>
   <features><acpi/><apic/></features>
   <clock offset='utc'/>
-  <on_reboot>restart</on_reboot>
+  <on_reboot>destroy</on_reboot>
   <devices>
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2'/>
       <source file='$disque'/>
       <target dev='vda' bus='virtio'/>
-      <boot order='1'/>
+      <boot order='2'/>
     </disk>
     <disk type='file' device='disk'>
       <driver name='qemu' type='raw'/>
       <source file='$ISO'/>
       <target dev='sda' bus='usb'/>
       <readonly/>
-      <boot order='2'/>
+      <boot order='1'/>
     </disk>
     <interface type='network'>
       <source network='$NET'/>
@@ -170,27 +175,41 @@ EOF
   mac="$("${VIRSH[@]}" domiflist "$nom" | awk 'NR > 2 && $5 {print $5; exit}')"
   log "$mode : installation en cours (délai max ${INSTALL_TIMEOUT}s)"
 
-  # SSH root/admin ne répond qu'une fois le système INSTALLÉ démarré :
-  # l'installateur n'ouvre pas SSH. On attend donc simplement qu'il réponde.
-  while (( SECONDS - t0 < INSTALL_TIMEOUT )); do
+  # 1. L'installateur va au bout puis redémarre : la VM s'arrête.
+  while "${VIRSH[@]}" domstate "$nom" 2>/dev/null | grep -q running; do
+    if (( SECONDS - t0 > INSTALL_TIMEOUT )); then
+      # L'installateur affiche sur l'écran VGA : sa capture dit où il s'est arrêté.
+      "${VIRSH[@]}" screenshot "$nom" "$WORK/iso-$mode-ecran.ppm" >/dev/null 2>&1 \
+        && echo "Capture de l'écran : $WORK/iso-$mode-ecran.ppm"
+      die "$mode : installation non terminée après ${INSTALL_TIMEOUT}s"
+    fi
+    sleep 10
+  done
+  log "$mode : installation terminée en $(( SECONDS - t0 ))s ; clé retirée, démarrage sur le disque interne"
+
+  # 2. Clé retirée, démarrage sur le disque interne.
+  "${VIRSH[@]}" detach-disk "$nom" sda --config >/dev/null
+  "${VIRSH[@]}" start "$nom" >/dev/null
+  local t1=$SECONDS
+  # SSH root/admin ne répond que sur le système INSTALLÉ : l'installateur
+  # n'ouvre pas SSH.
+  while (( SECONDS - t1 < 600 )); do
     ip="$("${VIRSH[@]}" net-dhcp-leases "$NET" --mac "$mac" 2>/dev/null | awk '/ipv4/ {split($5, a, "/"); print a[1]}' | tail -1)"
     if [[ -n "$ip" ]] && sshpass -p admin ssh "${SSH_OPTS[@]}" "root@$ip" true 2>/dev/null; then
       break
     fi
-    "${VIRSH[@]}" domstate "$nom" 2>/dev/null | grep -q running || die "$mode : la VM s'est arrêtée"
-    sleep 10
+    sleep 5
   done
   if ! sshpass -p admin ssh "${SSH_OPTS[@]}" "root@${ip:-0}" true 2>/dev/null; then
-    # L'installateur affiche sur l'écran VGA : sa capture dit où il s'est arrêté.
     "${VIRSH[@]}" screenshot "$nom" "$WORK/iso-$mode-ecran.ppm" >/dev/null 2>&1 \
       && echo "Capture de l'écran : $WORK/iso-$mode-ecran.ppm"
-    die "$mode : système installé injoignable en SSH root/admin après ${INSTALL_TIMEOUT}s"
+    die "$mode : système installé injoignable en SSH root/admin"
   fi
-  log "$mode : système installé, SSH root/admin ouvert sur $ip après $(( SECONDS - t0 ))s"
+  log "$mode : système installé démarré, SSH root/admin ouvert sur $ip après $(( SECONDS - t1 ))s"
   local SSH=(sshpass -p admin ssh "${SSH_OPTS[@]}" "root@$ip")
 
   # La publication du premier démarrage (bits-sync) peut être encore en cours.
-  local t1=$SECONDS
+  t1=$SECONDS
   until "${SSH[@]}" 'systemctl is-active --quiet bits-dnsmasq.service && systemctl is-active --quiet bits-web.service' 2>/dev/null; do
     (( SECONDS - t1 < 300 )) || {
       "${SSH[@]}" 'systemctl --no-pager status bits-sync bits-dnsmasq bits-web bits-installation; tail -30 /var/log/bits-installation.log' || true
@@ -226,8 +245,18 @@ EOF
   verifier "console : commande SSH" grep -qF "ssh root@$ip" <<<"$banniere"
   verifier "mises à jour automatiques activées" \
     "${SSH[@]}" 'apt-config dump | grep -q "APT::Periodic::Unattended-Upgrade \"1\""'
+  # Au premier démarrage, apt-daily peut tenir le verrou d'apt : la simulation
+  # s'arrête alors avant d'afficher les origines autorisées. On la refait
+  # jusqu'à ce qu'elle les affiche (5 min au plus).
+  local uu=""
+  for _ in $(seq 60); do
+    uu="$("${SSH[@]}" 'unattended-upgrade --dry-run -v 2>&1' || true)"
+    grep -qi "allowed origins" <<<"$uu" && break
+    sleep 5
+  done
   verifier "unattended-upgrades autorise l'origine BITS" \
-    "${SSH[@]}" 'unattended-upgrade --dry-run -v 2>&1 | grep -i "allowed origins" | grep -q "origin=BITS"'
+    bash -c 'grep -i "allowed origins" <<<"$1" | grep -q "origin=BITS"' _ "$uu"
+  grep -qi "allowed origins" <<<"$uu" || { echo "  sortie de unattended-upgrade :"; head -10 <<<"$uu" | sed 's/^/    /'; }
   verifier "service de rattrapage non déclenché (paquets installés pendant l'installation)" \
     "${SSH[@]}" '[ "$(systemctl show -p ConditionResult --value bits-installation.service)" = no ]'
 
