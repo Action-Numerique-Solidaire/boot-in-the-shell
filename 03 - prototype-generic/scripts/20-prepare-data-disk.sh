@@ -5,6 +5,8 @@ require_root
 load_config
 
 [[ ${1:-} == "ERASE-PXE-DATA" ]] || die "Usage : sudo $0 ERASE-PXE-DATA"
+[[ -n "$PXE_DATA_DISK" && -n "$PXE_DATA_PARTITION" ]] \
+  || die "PXE_DATA_DISK et PXE_DATA_PARTITION sont vides : pas de disque dédié à préparer (les données vont dans $PXE_DATA_MOUNT)."
 [[ -b "$PXE_DATA_DISK" ]] || die "Disque absent : $PXE_DATA_DISK"
 disk_real="$(readlink -f "$PXE_DATA_DISK")"
 root_source="$(findmnt -n -o SOURCE /)"
@@ -41,5 +43,5 @@ line="UUID=$uuid $PXE_DATA_MOUNT ext4 defaults,nofail 0 2"
 grep -Fqx "$line" /etc/fstab || printf '%s\n' "$line" >> /etc/fstab
 systemctl daemon-reload
 mount "$PXE_DATA_MOUNT"
-install -d -m 0755 "$PXE_DATA_MOUNT"/{downloads,iso,live,windows,clonezilla,clonezilla-images}
+install -d -m 0755 "$PXE_DATA_MOUNT"/{downloads,windows,clonezilla,clonezilla-images}
 echo "Disque de données prêt sous $PXE_DATA_MOUNT."

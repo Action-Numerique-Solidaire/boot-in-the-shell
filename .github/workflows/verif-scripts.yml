@@ -28,6 +28,10 @@ jobs:
               fail=1
             fi
           done < <(find . -path ./build -prune -o -name '*.sh' -print0)
+          # Scripts sans extension .sh
+          for f in packaging/bits-pxe-server/bitsctl; do
+            if bash -n "$f"; then echo "ok      $f"; else echo "::error file=$f::erreur de syntaxe bash"; fail=1; fi
+          done
           exit $fail
 
       - name: Bit exécutable sur les scripts lancés directement
@@ -37,6 +41,9 @@ jobs:
                    "packaging/build-deb.sh" \
                    "packaging/build-apt-repo.sh" \
                    "tests/depot-apt.sh" \
+                   "tests/paquet-deb.sh" \
+                   "tests/e2e-paquet.sh" \
+                   "packaging/bits-pxe-server/bitsctl" \
                    "03 - prototype-generic/scripts/install.sh" \
                    "04 - live-iso/overlay/usr/local/sbin/generic-pxe-wizard.sh"; do
             if [ ! -x "$f" ]; then
@@ -51,6 +58,8 @@ jobs:
           done
           exit $fail
 
+      # Régénérer après toute modification du dossier :
+      #   cd "03 - prototype-generic" && find . -type f ! -name MANIFEST.sha256 | sort | xargs -d '\n' sha256sum > MANIFEST.sha256
       - name: Intégrité du prototype générique (MANIFEST.sha256)
         working-directory: "03 - prototype-generic"
         run: sha256sum -c MANIFEST.sha256

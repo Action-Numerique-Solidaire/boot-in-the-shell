@@ -4,12 +4,17 @@ source "$(dirname "$0")/lib/common.sh"
 require_root
 load_config
 
+# Par défaut, le réseau appartient au système (DHCP de l'installation,
+# NetworkManager, ifupdown…) et BITS se contente de le lire. Écrire Netplan
+# n'arrive que sur demande explicite.
 if [[ "${PXE_MANAGE_NETWORK:-no}" != "yes" ]]; then
-  ip -4 -o addr show dev "$PXE_INTERFACE" | grep -Fq " $PXE_ADDRESS_CIDR " || \
-    die "$PXE_ADDRESS_CIDR doit déjà être active sur $PXE_INTERFACE."
-  echo "Réseau déjà configuré."
+  echo "Réseau géré par le système : $PXE_ADDRESS_CIDR sur $PXE_INTERFACE."
   exit 0
 fi
+
+require_command netplan
+: "${PXE_GATEWAY:?PXE_GATEWAY est requis avec PXE_MANAGE_NETWORK=yes}"
+: "${PXE_DNS:?PXE_DNS est requis avec PXE_MANAGE_NETWORK=yes}"
 
 target=/etc/netplan/90-generic-pxe.yaml
 backup=/var/backups/generic-pxe-netplan-$(date '+%Y%m%d-%H%M%S')

@@ -1,0 +1,45 @@
+name: Paquet (installation réelle et dépôt apt)
+
+# Le paquet installé par le vrai apt d'un Debian 13 vierge, puis lu depuis un
+# dépôt apt local : une minute, sans VM. La chaîne complète, avec des clients
+# PXE, est tests/e2e-paquet.sh (libvirt, à lancer en local).
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'packaging/**'
+      - '03 - prototype-generic/**'
+      - 'tests/paquet-deb.sh'
+      - 'tests/depot-apt.sh'
+      - '.github/workflows/paquet.yml'
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - '03 - prototype-generic/**'
+      - 'tests/paquet-deb.sh'
+      - 'tests/depot-apt.sh'
+      - '.github/workflows/paquet.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paquet:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construire le paquet
+        run: |
+          sudo apt-get install -y --no-install-recommends apt-utils >/dev/null
+          ./packaging/build-deb.sh "0.0.0+ci$(date -u +%Y%m%d%H%M)" out/debs
+
+      - name: Installation réelle (conteneur Debian 13)
+        run: tests/paquet-deb.sh out/debs/bits-pxe-server_*.deb out/debs/bits-web_*.deb
+
+      - name: Dépôt apt local
+        run: |
+          ./packaging/build-apt-repo.sh out/apt test out/debs/*.deb
+          tests/depot-apt.sh out/apt

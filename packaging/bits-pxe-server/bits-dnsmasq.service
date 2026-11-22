@@ -1,0 +1,20 @@
+[Unit]
+Description=BITS : ProxyDHCP et TFTP pour le démarrage PXE (dnsmasq, sans DNS)
+Documentation=man:dnsmasq(8)
+# La configuration est écrite par « bitsctl apply » : avant la première
+# publication, il n'y a rien à servir.
+ConditionPathExists=/var/lib/bits/dnsmasq.conf
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/dnsmasq --test --conf-file=/var/lib/bits/dnsmasq.conf
+# port=0 dans la configuration : aucun serveur DNS, donc aucun conflit avec
+# systemd-resolved ni avec un dnsmasq déjà présent pour le DNS.
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/var/lib/bits/dnsmasq.conf --pid-file=/run/bits-dnsmasq.pid --user=dnsmasq
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

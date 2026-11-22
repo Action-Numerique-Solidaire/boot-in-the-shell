@@ -1,16 +1,21 @@
 # Serveur PXE générique
 
-Ce dossier transforme une installation Ubuntu Server propre en serveur PXE autonome. Il met en place :
+Le cœur de Boot in the Shell, empaqueté en `bits-pxe-server` (voir
+`packaging/`). Il met en place :
 
-- dnsmasq en mode ProxyDHCP et TFTP ;
-- iPXE pour les clients BIOS et UEFI ;
+- dnsmasq en mode ProxyDHCP et TFTP, dans sa propre instance sans DNS ;
+- iPXE pour les clients BIOS et UEFI (chargeurs du paquet `ipxe`) ;
 - nginx pour le menu, les noyaux et les fichiers de démarrage ;
-- NFS pour les médias Casper et le dépôt d'images Clonezilla ;
+- NFS pour les médias Casper et Debian live, et le dépôt d'images Clonezilla ;
 - Samba uniquement lorsqu'une image Windows est activée.
 
-Les médias sont décrits dans `config/media.conf`. Le serveur les télécharge, contrôle leur empreinte SHA-256 puis les publie automatiquement. Il n'utilise aucun contenu provenant d'un ancien serveur PXE.
+Les médias sont décrits dans `config/media.conf`. Le serveur les télécharge,
+contrôle leur empreinte SHA-256 puis les publie. Le réseau est lu sur
+l'interface active : rien n'est à configurer pour commencer.
 
-Commencer par le document [PLAYBOOK.md](PLAYBOOK.md). Le script `scripts/install.sh` orchestre toutes les étapes, mais chaque script reste exécutable séparément pour faciliter le diagnostic.
+Commencer par le document [PLAYBOOK.md](PLAYBOOK.md). `bitsctl apply` (paquet)
+ou `scripts/install.sh` (depuis le dépôt) enchaîne toutes les étapes, et chaque
+script reste exécutable séparément pour le diagnostic.
 
 ## Limite volontaire
 

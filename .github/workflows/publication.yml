@@ -62,27 +62,32 @@ jobs:
           echo "tag=$tag  version_deb=$deb_version  stable=$stable"
 
       # --- paquet .deb : quelques secondes ----------------------------------
-      - name: Construire le paquet .deb
+      - name: Construire les paquets .deb
         run: |
           set -Eeuo pipefail
-          deb=$(./packaging/build-deb.sh "${{ steps.v.outputs.deb_version }}" "$GITHUB_WORKSPACE/out")
-          echo "paquet : $deb"
-          dpkg-deb -I "$deb"
-
-      - name: Vérifier le paquet .deb
-        run: |
-          set -Eeuo pipefail
-          deb=$(ls out/*.deb)
-          # Le point d'entrée et les scripts du pipeline doivent être présents.
-          for f in ./usr/sbin/bits-pxe-install \
-                   ./usr/share/bits-pxe-server/scripts/install.sh \
-                   ./usr/share/bits-pxe-server/scripts/lib/common.sh \
-                   ./etc/bits-pxe-server/pxe.env; do
-            dpkg-deb -c "$deb" | grep -q " $f\$" \
-              || { echo "::error::$f absent du paquet"; exit 1; }
+          ./packaging/build-deb.sh "${{ steps.v.outputs.deb_version }}" "$GITHUB_WORKSPACE/out" | while read -r deb; do
+            echo "paquet : $deb"
+            dpkg-deb -I "$deb"
           done
+
+      - name: Vérifier les paquets .deb
+        run: |
+          set -Eeuo pipefail
+          # Les points d'entrée doivent être présents dans chaque paquet.
+          verifier() {
+            local deb="$1"; shift
+            for f in "$@"; do
+              dpkg-deb -c "$deb" | grep -q " $f\$" \
+                || { echo "::error::$f absent de $(basename "$deb")"; exit 1; }
+            done
+          }
+          verifier out/bits-pxe-server_*.deb ./usr/sbin/bitsctl ./usr/sbin/bits-pxe-install \
+            ./usr/share/bits-pxe-server/scripts/lib/common.sh ./etc/bits-pxe-server/pxe.env \
+            ./usr/lib/systemd/system/bits-dnsmasq.service ./usr/lib/systemd/system/bits-sync.service
+          verifier out/bits-web_*.deb ./usr/share/bits-web/bits-web.py ./usr/share/bits-web/index.html \
+            ./etc/sudoers.d/bits-web ./usr/lib/systemd/system/bits-web.service
           sudo apt-get install -y --no-install-recommends lintian >/dev/null 2>&1 || true
-          command -v lintian >/dev/null && lintian "$deb" || true
+          if command -v lintian >/dev/null; then lintian out/*.deb || true; fi
 
       # --- empreintes et récapitulatif --------------------------------------
       - name: Empreintes
@@ -130,13 +135,15 @@ jobs:
 
           \`\`\`bash
           echo "deb [trusted=yes] $base ./" | sudo tee /etc/apt/sources.list.d/bits.list
-          sudo apt update && sudo apt install bits-pxe-server
+          sudo apt update && sudo apt install bits-pxe-server bits-web
           \`\`\`
 
-          ## Depuis ce fichier
+          L'interface web est alors sur le port 80 du serveur.
+
+          ## Depuis ces fichiers
 
           \`\`\`bash
-          sudo apt install ./$(cd out && ls *.deb)
+          sudo apt install $(cd out && ls *.deb | sed 's|^|./|' | tr '\n' ' ')
           \`\`\`
 
           Les dépendances (dnsmasq, nginx, nfs-kernel-server…) sont tirées par apt.

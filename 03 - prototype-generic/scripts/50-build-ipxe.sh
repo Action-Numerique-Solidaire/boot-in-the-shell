@@ -4,28 +4,38 @@ source "$(dirname "$0")/lib/common.sh"
 require_root
 load_config
 
-source_root="$PXE_BUILD_ROOT/ipxe"
-prebuilt_dir="${PXE_IPXE_PREBUILT:-$PXE_DATA_MOUNT/ipxe-prebuilt}"
-bios_out="$source_root/src/bin/undionly.kpxe"
-efi_out="$source_root/src/bin-x86_64-efi/snponly.efi"
-boot_script="$PXE_BUILD_ROOT/boot.ipxe"
+# Chargeurs iPXE servis en TFTP, par ordre de préférence :
+#
+#   1. PXE_IPXE_PREBUILT  répertoire de chargeurs déjà compilés
+#                         (tools/construire-ipxe.sh) ;
+#   2. /usr/lib/ipxe      paquet « ipxe » de la distribution : le cas normal,
+#                         rien à compiler ni à télécharger ;
+#   3. PXE_IPXE_COMPILE=yes  clone et compilation au commit IPXE_GIT_COMMIT,
+#                         avec le script embarqué config/boot.ipxe.
+#
+# Les chargeurs de la distribution n'embarquent pas de script : une fois
+# lancés, ils refont une requête DHCP en s'annonçant iPXE, et dnsmasq leur
+# sert alors le menu (règles « tag:ipxe » écrites par 60-publish-media.sh).
+# C'est le même chemin que pour une carte réseau dont la ROM est déjà iPXE.
+distro_dir=/usr/lib/ipxe
+prebuilt_dir="${PXE_IPXE_PREBUILT:-}"
+install -d -m 0755 "$PXE_TFTP_ROOT"
 
-# L'URL du menu n'est plus figée à la compilation. ${filename} est ce que
-# dnsmasq sert à un client déjà iPXE, et ${next-server} l'adresse du serveur
-# dans la réponse DHCP. Les chargeurs cessent donc d'être liés à une adresse :
-# ils peuvent être compilés une fois et livrés tels quels avec la clé USB, et
-# changer l'adresse du serveur ne demande plus de les recompiler.
-MENU_URL_REPLI='http://${next-server}/pxe/menu.ipxe'
-
-if [[ -s "$prebuilt_dir/undionly.kpxe" && -s "$prebuilt_dir/snponly.efi" ]]; then
-  # Chemin hors ligne : les chargeurs sont déjà là, rien à cloner ni compiler.
+if [[ -n "$prebuilt_dir" && -s "$prebuilt_dir/undionly.kpxe" && -s "$prebuilt_dir/snponly.efi" ]]; then
   log "Chargeurs iPXE pré-compilés repris depuis $prebuilt_dir"
-  install -d -m 0755 "$(dirname "$bios_out")" "$(dirname "$efi_out")"
-  install -m 0644 "$prebuilt_dir/undionly.kpxe" "$bios_out"
-  install -m 0644 "$prebuilt_dir/snponly.efi" "$efi_out"
+  bios_src="$prebuilt_dir/undionly.kpxe"
+  efi_src="$prebuilt_dir/snponly.efi"
+elif [[ "${PXE_IPXE_COMPILE:-no}" != yes && -s "$distro_dir/undionly.kpxe" && -s "$distro_dir/snponly.efi" ]]; then
+  log "Chargeurs iPXE du paquet ipxe ($distro_dir)"
+  bios_src="$distro_dir/undionly.kpxe"
+  efi_src="$distro_dir/snponly.efi"
 else
-  require_command git
-  require_command make
+  [[ "${PXE_IPXE_COMPILE:-no}" == yes ]] \
+    || die "Chargeurs iPXE absents de $distro_dir (paquet ipxe). Installer ipxe, ou PXE_IPXE_COMPILE=yes pour compiler."
+  for c in git make gcc; do require_command "$c"; done
+  [[ -f /usr/include/lzma.h ]] || die "En-têtes lzma absents (paquet liblzma-dev), requis pour compiler iPXE."
+  source_root="$PXE_BUILD_ROOT/ipxe"
+  boot_script="$PXE_BUILD_ROOT/boot.ipxe"
   install -d -m 0755 "$PXE_BUILD_ROOT"
   if [[ ! -d "$source_root/.git" ]]; then
     git clone "$IPXE_GIT_URL" "$source_root"
@@ -40,13 +50,17 @@ else
   make -C "$source_root/src" clean
   make -C "$source_root/src" -j2 bin/undionly.kpxe EMBED="$boot_script"
   make -C "$source_root/src" -j2 bin-x86_64-efi/snponly.efi EMBED="$boot_script"
+  bios_src="$source_root/src/bin/undionly.kpxe"
+  efi_src="$source_root/src/bin-x86_64-efi/snponly.efi"
+
+  # grep SANS « -q » : avec -q, grep sort à la première correspondance,
+  # strings reçoit SIGPIPE et rend 141, et « set -o pipefail » en fait un échec.
+  # shellcheck disable=SC2016  # ${next-server} est une variable iPXE, littérale ici
+  if ! strings "$efi_src" | grep -F 'http://${next-server}/pxe/menu.ipxe' >/dev/null; then
+    die "Le chargeur UEFI n'embarque pas l'URL de repli du menu : il n'a pas été compilé avec le bon script."
+  fi
 fi
 
-[[ -s "$bios_out" && -s "$efi_out" ]] || die "Chargeurs iPXE absents après l'étape 50."
-# grep SANS « -q » : avec -q, grep sort a la premiere correspondance, strings
-# recoit SIGPIPE et rend 141, et « set -o pipefail » en fait un echec. Le
-# defaut etait deja present avant l'URL non figee, et se declenchait au hasard.
-if ! strings "$efi_out" | grep -F "$MENU_URL_REPLI" >/dev/null; then
-  die "Le chargeur UEFI n'embarque pas l'URL de repli du menu : il n'a pas été compilé avec le bon script."
-fi
-echo "Chargeurs iPXE BIOS et UEFI prêts."
+install -m 0644 "$bios_src" "$PXE_TFTP_ROOT/undionly.kpxe"
+install -m 0644 "$efi_src" "$PXE_TFTP_ROOT/snponly.efi"
+echo "Chargeurs iPXE BIOS et UEFI prêts dans $PXE_TFTP_ROOT."

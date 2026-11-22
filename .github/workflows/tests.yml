@@ -17,6 +17,9 @@ name: Tests (amorçage réel de l'ISO)
 # de zéro — d'où l'absence de cache dans publication.yml.
 on:
   push:
+    # Branches seulement : sur un push de tag, GitHub ignore le filtre paths
+    # et lançait ce workflow à chaque publication.
+    branches: ['**']
     paths:
       - '04 - live-iso/**'
       - 'tests/boot-test.sh'

@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boot in the Shell</title>
+<style>
+  /* Aucune ressource externe : l'interface doit fonctionner sur un réseau
+     d'atelier sans accès à internet. */
+  :root {
+    --fond: #f6f7f9; --carte: #ffffff; --texte: #1d2330; --discret: #5c6577;
+    --bord: #dde1e8; --accent: #1f6feb; --accent-texte: #ffffff;
+    --ok: #1a7f37; --ok-fond: #e6f4ea; --alerte: #9a6700; --alerte-fond: #fff5d6;
+    --erreur: #c62828; --erreur-fond: #fdecea; --neutre-fond: #eef0f4;
+    --code-fond: #11161f; --code-texte: #d6dde8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fond: #0f131a; --carte: #171c25; --texte: #e3e8ef; --discret: #9aa4b5;
+      --bord: #2a3140; --accent: #4c8dff; --accent-texte: #0b1220;
+      --ok: #4ac26b; --ok-fond: #13291b; --alerte: #e3b341; --alerte-fond: #2b2411;
+      --erreur: #ff6b6b; --erreur-fond: #2e1517; --neutre-fond: #212835;
+      --code-fond: #0a0d12; --code-texte: #c9d3e0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fond); color: var(--texte);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .serveur { color: var(--discret); font-size: 14px; }
+  .serveur code { color: var(--texte); }
+  .bandeau {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between;
+    background: var(--carte); border: 1px solid var(--bord); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  .bandeau .statut { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .bandeau .message { color: var(--discret); font-size: 13px; overflow-wrap: anywhere; }
+  button {
+    font: inherit; border-radius: 8px; border: 1px solid var(--bord); background: var(--carte);
+    color: var(--texte); padding: 8px 14px; cursor: pointer;
+  }
+  button.primaire { background: var(--accent); border-color: var(--accent); color: var(--accent-texte); font-weight: 600; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .medias { display: grid; gap: 10px; }
+  .media {
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; align-items: center;
+    background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 14px 16px;
+  }
+  .media .nom { font-weight: 600; }
+  .media .details { grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+                    color: var(--discret); font-size: 13px; }
+  .pastille { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+              background: var(--neutre-fond); color: var(--discret); }
+  .pastille.publie { background: var(--ok-fond); color: var(--ok); }
+  .pastille.attente { background: var(--alerte-fond); color: var(--alerte); }
+  .pastille.ecarte { background: var(--erreur-fond); color: var(--erreur); }
+  .interrupteur { grid-column: 2; grid-row: 1 / span 2; position: relative; width: 46px; height: 26px; }
+  .interrupteur input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; position: absolute; z-index: 1; }
+  .interrupteur input:disabled { cursor: not-allowed; }
+  .interrupteur span { position: absolute; inset: 0; border-radius: 999px; background: var(--bord); transition: background .15s; }
+  .interrupteur span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+  .interrupteur input:checked + span { background: var(--accent); }
+  .interrupteur input:checked + span::after { transform: translateX(20px); }
+  .interrupteur input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .interrupteur input:disabled + span { opacity: .5; }
+  .rond { width: 10px; height: 10px; border-radius: 50%; background: var(--discret); flex: none; }
+  .rond.ok { background: var(--ok); } .rond.alerte { background: var(--alerte); } .rond.erreur { background: var(--erreur); }
+  .rond.actif { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  details { margin-top: 16px; background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; }
+  summary { padding: 12px 16px; cursor: pointer; font-weight: 600; }
+  pre {
+    margin: 0; padding: 12px 16px; max-height: 420px; overflow: auto; background: var(--code-fond);
+    color: var(--code-texte); border-radius: 0 0 10px 10px; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .erreur-globale { color: var(--erreur); margin: 8px 0 0; font-size: 14px; }
+  .aide { color: var(--discret); font-size: 13px; margin: 18px 2px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Boot in the Shell</h1>
+    <div class="serveur" id="serveur">…</div>
+  </header>
+
+  <section class="bandeau" aria-live="polite">
+    <div class="statut"><span class="rond" id="rond"></span>
+      <div><div id="statut">Chargement…</div><div class="message" id="message"></div></div>
+    </div>
+    <button class="primaire" id="appliquer" disabled>Appliquer</button>
+  </section>
+
+  <section class="medias" id="medias" aria-label="Images proposées par le serveur PXE"></section>
+  <p class="erreur-globale" id="erreur" role="alert"></p>
+
+  <details id="volet-journal">
+    <summary>Journal de publication <span class="serveur" id="journal-nom"></span></summary>
+    <pre id="journal">Aucun journal pour le moment.</pre>
+  </details>
+
+  <p class="aide">Activer une image puis « Appliquer » : elle est téléchargée, vérifiée, puis ajoutée au
+    menu de démarrage réseau. Désactivée, elle en est retirée ; le fichier téléchargé est conservé.
+    Le menu n'a pas de choix par défaut : un poste démarré sur le réseau attend qu'on choisisse.</p>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const ENTETES = { "Content-Type": "application/json", "X-BITS-Requete": "1" };
+let dernierEtat = null, journalPos = 0, journalNom = null, journalTexte = "";
+
+function octets(n) {
+  if (n == null) return "";
+  const u = ["o", "Ko", "Mo", "Go", "To"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1).replace(".", ",") : n) + " " + u[i];
+}
+
+const PASTILLES = {
+  "publié": ["publie", "Publiée"], "à publier": ["attente", "À publier"],
+  "à retirer": ["attente", "À retirer"], "écarté": ["ecarte", "Écartée"], "inactif": ["", "Inactive"],
+};
+const TYPES = { "casper-iso": "Ubuntu / Casper", "debian-live-iso": "Debian live",
+                "clonezilla-zip": "Clonezilla", "windows-iso": "Windows" };
+
+function rendreMedias(etat) {
+  const enCours = etat.publication.en_cours;
+  const conteneur = $("medias");
+  conteneur.replaceChildren();
+  for (const m of etat.medias) {
+    const carte = document.createElement("article");
+    carte.className = "media";
+    const nom = document.createElement("div");
+    nom.className = "nom"; nom.textContent = m.libelle;
+    const details = document.createElement("div");
+    details.className = "details";
+    const [classe, texte] = PASTILLES[m.etat] || ["", m.etat];
+    const pastille = document.createElement("span");
+    pastille.className = "pastille " + classe; pastille.textContent = texte;
+    details.append(pastille);
+    const infos = [TYPES[m.type] || m.type];
+    if (m.en_telechargement != null) infos.push("téléchargement : " + octets(m.en_telechargement));
+    else if (m.telecharge != null) infos.push("téléchargée : " + octets(m.telecharge));
+    if (!m.disponible) infos.push("URL à renseigner dans le catalogue");
+    for (const t of infos) { const s = document.createElement("span"); s.textContent = t; details.append(s); }
+
+    const inter = document.createElement("label");
+    inter.className = "interrupteur";
+    const caseAc = document.createElement("input");
+    caseAc.type = "checkbox"; caseAc.checked = m.active;
+    caseAc.disabled = enCours || !m.disponible;
+    caseAc.setAttribute("aria-label", (m.active ? "Désactiver " : "Activer ") + m.libelle);
+    caseAc.addEventListener("change", () => basculer(m.id, caseAc.checked, caseAc));
+    inter.append(caseAc, document.createElement("span"));
+    carte.append(nom, inter, details);
+    conteneur.append(carte);
+  }
+}
+
+function rendre(etat) {
+  dernierEtat = etat;
+  const s = etat.serveur;
+  $("serveur").innerHTML = "";
+  const parts = [];
+  if (s.ip) parts.push(["PXE sur ", s.ip, " (" + (s.interface || "?") + ")"]);
+  if (s.libre != null) parts.push(["", octets(s.libre), " libres"]);
+  parts.forEach(([a, code, b], i) => {
+    if (i) $("serveur").append(" · ");
+    const c = document.createElement("code"); c.textContent = code;
+    $("serveur").append(a, c, b);
+  });
+
+  const p = etat.publication, d = p.derniere;
+  const aPublier = etat.medias.some((m) => m.etat === "à publier" || m.etat === "à retirer");
+  let rond = "", statut, message = "";
+  if (p.en_cours) {
+    rond = "actif"; statut = "Publication en cours…";
+    const enTelech = etat.medias.find((m) => m.en_telechargement != null);
+    if (enTelech) message = enTelech.libelle + " : " + octets(enTelech.en_telechargement) + " téléchargés";
+  } else if (aPublier) {
+    rond = "alerte"; statut = "Changements à appliquer";
+    message = "Les images marquées « À publier » ou « À retirer » attendent une publication.";
+  } else if (!d) {
+    statut = "Aucune publication encore"; message = "Activer une image puis « Appliquer ».";
+  } else if (d.resultat === "réussie") {
+    rond = "ok"; statut = "Serveur PXE à jour"; message = "Dernière publication : " + d.date;
+  } else if (d.resultat === "partielle") {
+    rond = "alerte"; statut = "Publié, avec des images écartées"; message = d.message;
+  } else {
+    rond = "erreur"; statut = "Dernière publication : " + d.resultat; message = d.message;
+  }
+  $("rond").className = "rond " + rond;
+  $("statut").textContent = statut;
+  $("message").textContent = message;
+  $("appliquer").disabled = p.en_cours;
+  $("appliquer").textContent = p.en_cours ? "Publication…" : "Appliquer";
+  rendreMedias(etat);
+}
+
+// curl réécrit sa ligne de progression avec \r : on ne garde que le dernier état.
+function nettoyer(texte) {
+  return texte.split("\n").map((l) => { const i = l.lastIndexOf("\r"); return i >= 0 ? l.slice(i + 1) : l; }).join("\n");
+}
+
+async function lireJournal() {
+  const r = await fetch("/api/journal?depuis=" + journalPos, { cache: "no-store" });
+  const j = await r.json();
+  if (!j.fichier) return;
+  if (j.fichier !== journalNom || j.depuis < journalPos) { journalTexte = ""; journalNom = j.fichier; }
+  journalTexte += j.texte; journalPos = j.fin;
+  if (journalTexte.length > 400000) journalTexte = journalTexte.slice(-300000);
+  const pre = $("journal");
+  const enBas = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+  pre.textContent = nettoyer(journalTexte) || "(vide)";
+  $("journal-nom").textContent = "— " + journalNom;
+  if (enBas) pre.scrollTop = pre.scrollHeight;
+}
+
+async function rafraichir() {
+  try {
+    const r = await fetch("/api/etat", { cache: "no-store" });
+    rendre(await r.json());
+    await lireJournal();
+    $("erreur").textContent = "";
+  } catch (e) {
+    $("erreur").textContent = "Serveur injoignable : " + e.message;
+  }
+  setTimeout(rafraichir, dernierEtat && dernierEtat.publication.en_cours ? 1500 : 8000);
+}
+
+async function poster(url, corps) {
+  const r = await fetch(url, { method: "POST", headers: ENTETES, body: JSON.stringify(corps || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.erreur || r.statusText);
+  return j;
+}
+
+async function basculer(id, active, caseAc) {
+  caseAc.disabled = true;
+  try { await poster("/api/media/" + encodeURIComponent(id), { active }); $("erreur").textContent = ""; }
+  catch (e) { $("erreur").textContent = e.message; caseAc.checked = !active; }
+  const r = await fetch("/api/etat", { cache: "no-store" }); rendre(await r.json());
+}
+
+$("appliquer").addEventListener("click", async () => {
+  $("appliquer").disabled = true;
+  try {
+    await poster("/api/appliquer");
+    journalPos = 0; journalTexte = ""; journalNom = null;
+    $("volet-journal").open = true;
+    $("erreur").textContent = "";
+  } catch (e) { $("erreur").textContent = e.message; }
+  const r = await fetch("/api/etat", { cache: "no-store" }); rendre(await r.json());
+});
+
+rafraichir();
+</script>
+</body>
+</html>

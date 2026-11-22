@@ -1,163 +1,180 @@
-# Playbook autonome — serveur PXE générique
+# Playbook — serveur PXE Boot in the Shell
 
-Ce playbook part d'un Ubuntu Server propre. Il ne dépend d'aucun autre serveur et ne copie aucun ancien contenu PXE.
+Le serveur PXE s'installe par un paquet apt, `bits-pxe-server`. Il ne dépend
+d'aucun autre serveur et ne copie aucun ancien contenu PXE.
 
-## 1. Préparer le serveur
+Éprouvé de bout en bout sur **Debian 13** (`tests/e2e-paquet.sh`). Sur Debian
+12, Ubuntu 22.04 et 24.04, toutes les dépendances et les deux chargeurs iPXE
+sont présents dans la distribution, mais le démarrage de clients n'y a pas été
+testé ; Debian 12 fournit un iPXE de 2019.
 
-Installer Ubuntu Server sur le disque système, créer un compte administrateur autorisé à utiliser `sudo`, activer OpenSSH et appliquer les mises à jour du système.
+## 1. Prérequis
 
-Le serveur doit disposer :
+- un accès Internet pendant l'installation et pour télécharger les images ;
+- un **DHCP déjà présent** sur le réseau (la box ou le routeur du site). Le
+  serveur fonctionne en ProxyDHCP : il ne distribue jamais d'adresses ;
+- une adresse IPv4 sur l'interface réseau, statique ou obtenue par DHCP ;
+- de la place pour les images servies dans `/srv/bits-data` : 0,3 Go pour
+  Killbit, 4 à 7 Go pour une image Ubuntu ou Zorin.
 
-- d'une adresse IPv4 fixe ;
-- d'un disque système distinct du disque destiné aux médias, si un disque de données est utilisé ;
-- d'un accès Internet pendant l'installation ;
-- d'un DHCP déjà présent sur le réseau. Le serveur PXE fonctionne en ProxyDHCP et ne distribue pas les adresses IP.
+Ne pas activer deux serveurs ProxyDHCP sur le même réseau.
 
-Ne pas activer deux serveurs ProxyDHCP sur le même réseau de test.
-
-## 2. Copier le prototype
-
-Copier le dossier `generic-proto` sur le serveur, par exemple sous `/home/user/generic-proto`, puis rendre les scripts exécutables :
-
-```bash
-chmod +x /home/user/generic-proto/scripts/*.sh
-```
-
-## 3. Créer les fichiers de configuration
+## 2. Installer
 
 ```bash
-cd /home/user/generic-proto
-cp config/pxe.env.example config/pxe.env
-cp config/media.conf.example config/media.conf
+echo "deb [trusted=yes] https://github.com/Action-Numerique-Solidaire/boot-in-the-shell/releases/download/apt/ ./" \
+  | sudo tee /etc/apt/sources.list.d/bits.list
+sudo apt update && sudo apt install bits-pxe-server
 ```
 
-Modifier `config/pxe.env` : nom du serveur, interface réseau, adresse avec son préfixe (par exemple `192.168.1.15/24`), passerelle, DNS et sous-réseau (par exemple `192.168.1.0/24`).
+Canal d'essai (versions produites par les tags `test-*`) : remplacer
+`download/apt/` par `download/apt-test/`.
 
-Identifier le disque de données avec un nom stable :
+L'installation **n'active rien** : aucun service ne répond aux démarrages PXE
+tant que la première publication n'a pas eu lieu. Elle n'installe pas non plus
+de serveur DNS : BITS utilise `dnsmasq-base` et lance sa propre instance,
+`bits-dnsmasq.service`, sans DNS.
+
+Rien n'est à configurer pour commencer. Le réseau est lu sur l'interface de la
+route par défaut ; pour l'imposer, renseigner `PXE_INTERFACE` (et au besoin
+`PXE_ADDRESS_CIDR`) dans `/etc/bits-pxe-server/pxe.env`.
+
+### Interface web (facultative)
 
 ```bash
-ls -l /dev/disk/by-id/
-lsblk -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL,SERIAL
+sudo apt install bits-web
 ```
 
-Reporter dans `PXE_DATA_DISK` le lien `/dev/disk/by-id/...` du disque entier et dans `PXE_DATA_PARTITION` le lien correspondant à sa première partition (`...-part1`). Ne jamais utiliser le disque qui contient `/`.
+Elle s'ouvre depuis n'importe quel poste du réseau, à l'adresse
+`http://<adresse du serveur>/`, affichée aussi sur la console du serveur. Elle
+liste les images du catalogue, permet d'activer ou de désactiver chacune, lance
+la publication et en affiche le journal en direct. Elle fait la même chose que
+les commandes `bitsctl` ci-dessous.
 
-Avec `PXE_MANAGE_NETWORK=yes`, le playbook écrit une configuration Netplan et utilise `netplan try` avec retour automatique. Avec `no`, configurer l'adresse fixe avant l'installation : le script vérifiera seulement sa présence.
+- Elle prend la place du site `default` de nginx, s'il n'a pas été modifié ;
+  il est rétabli à la désinstallation. Un site `default` modifié est laissé en
+  place, et l'interface n'est alors pas activée.
+- **Pas d'authentification** : tout poste du réseau peut activer une image et
+  lancer une publication. Elle ne doit être installée que sur un réseau
+  d'atelier.
+- Le service tourne sans privilège (utilisateur `bits-web`) ; sudo ne lui
+  accorde que `bitsctl media enable|disable` et le lancement de
+  `bits-sync.service`.
 
-## 4. Choisir les médias
+## 3. Choisir les images
 
-Modifier `config/media.conf`. Chaque ligne contient :
+```bash
+bitsctl media list
+sudo bitsctl media enable killbit
+sudo bitsctl media enable ubuntu
+```
+
+Le catalogue est `/etc/bits-pxe-server/media.conf`. Chaque ligne :
 
 ```text
-enabled|id|type|filename|url|sha256|libellé du menu
+activé|id|type|fichier|url|sha256|libellé du menu
 ```
 
-Conserver `yes` uniquement pour les médias à publier. Pour chaque média activé, fournir :
+Types : `casper-iso` (Ubuntu, Lubuntu, Zorin), `debian-live-iso` (Killbit),
+`clonezilla-zip`, `windows-iso`. L'empreinte est soit les 64 caractères
+hexadécimaux du SHA-256, soit `sha256sums:<url>` : elle est alors lue au
+téléchargement dans le fichier d'empreintes publié avec l'image. C'est ainsi
+que Killbit, publié sous un nom fixe, est suivi à chaque nouvelle version.
 
-1. une URL HTTPS directe vers l'ISO ou le ZIP ;
-2. l'empreinte SHA-256 publiée par l'éditeur ;
-3. un type pris en charge : `casper-iso`, `clonezilla-zip` ou `windows-iso`.
-
-Ubuntu, Lubuntu et Clonezilla disposent d'URL publiques dans l'exemple. Leur version et leur empreinte doivent être vérifiées au moment du déploiement. Windows, certains médias Zorin et les images personnalisées utilisent souvent un portail ou une URL temporaire : télécharger ou publier le fichier sur un serveur HTTPS accessible, puis renseigner son URL directe et son SHA-256.
-
-Pour calculer l'empreinte d'un fichier obtenu manuellement :
+## 4. Publier
 
 ```bash
-sha256sum /chemin/vers/le-fichier.iso
+sudo bitsctl apply
 ```
 
-Le script refusera tout média activé dont l'URL ou l'empreinte est absente.
+Dans l'ordre :
 
-## 5. Valider sans modifier le serveur
+1. validation de la configuration et du catalogue ;
+2. paquets propres à un type de média (samba et wimtools pour Windows), si un
+   tel média est activé ;
+3. contrôle du réseau (aucune écriture, sauf `PXE_MANAGE_NETWORK=yes`) ;
+4. téléchargement des images activées, vérifié avant publication ;
+5. chargeurs iPXE BIOS et UEFI, pris dans le paquet `ipxe` ;
+6. publication HTTP, TFTP, NFS (et Samba pour Windows), menu iPXE ;
+7. activation et contrôle des services.
+
+Une image qui ne peut pas être obtenue (miroir injoignable, empreinte fausse)
+est **écartée** : les autres sont publiées quand même, et `bitsctl apply` sort
+en 3. Une image désactivée est retirée du menu, démontée et n'est plus
+exportée ; son fichier téléchargé est gardé dans `/srv/bits-data/downloads`.
+
+Après la première publication, `bits-sync.service` rejoue la publication à
+chaque démarrage.
+
+Le menu n'a **ni choix par défaut ni délai** : un poste démarré sur le réseau
+par erreur attend qu'on choisisse, et ne lance jamais seul une installation
+ou un effacement. Il propose toujours le démarrage sur le disque local.
+
+## 5. Contrôler
 
 ```bash
-cd /home/user/generic-proto
-./scripts/00-validate-config.sh
+sudo bitsctl status
+sudo bitsctl log
 ```
 
-Corriger toutes les erreurs avant la suite.
+Les journaux de publication sont dans `/var/log/bits/` (les 30 derniers).
 
-## 6. Lancer l'installation complète
+Vérifier ensuite avec au moins un poste client :
 
-### Nouveau disque de données à effacer
-
-Cette commande détruit intégralement le disque défini par `PXE_DATA_DISK` :
-
-```bash
-sudo ./scripts/install.sh --prepare-data-disk
-```
-
-### Disque de données déjà préparé et monté
-
-Vérifier d'abord que `PXE_DATA_MOUNT` est réellement monté, puis lancer :
-
-```bash
-findmnt /srv/pxe-data
-sudo ./scripts/install.sh --reuse-data-disk
-```
-
-L'orchestrateur exécute dans cet ordre :
-
-1. validation de la configuration ;
-2. installation des paquets ;
-3. préparation optionnelle du disque de données ;
-4. configuration ou contrôle de l'adresse réseau ;
-5. téléchargement et vérification SHA-256 des médias ;
-6. compilation des chargeurs iPXE BIOS et UEFI avec la bonne adresse ;
-7. publication HTTP, TFTP, NFS et, si nécessaire, Samba ;
-8. activation et contrôle des services ;
-9. activation d'un service systemd (`generic-pxe-sync.service`) qui rejoue les étapes 5, 7 et 8 à chaque démarrage du serveur : tout média activé mais absent ou manquant dans `config/media.conf` est alors automatiquement téléchargé, vérifié et publié, sans intervention manuelle.
-
-## 7. Contrôler le résultat
-
-```bash
-sudo ./scripts/70-enable-and-validate.sh
-systemctl --no-pager --full status dnsmasq nginx nfs-server
-```
-
-Si Windows est activé :
-
-```bash
-systemctl --no-pager --full status smbd
-```
-
-Vérifier ensuite avec au moins un ordinateur client :
-
-1. démarrage PXE en mode UEFI ;
-2. affichage du menu iPXE ;
-3. démarrage réel de chaque média ;
-4. démarrage BIOS si ce mode doit être supporté ;
-5. montage automatique du dépôt Clonezilla et création d'une image de test ;
-6. accès à l'installation Windows et au partage Samba.
+1. démarrage PXE en UEFI, puis en BIOS si ce mode doit être pris en charge ;
+2. affichage du menu ;
+3. démarrage réel de chaque image ;
+4. pour Clonezilla, montage du dépôt d'images et création d'une image de test ;
+5. pour Windows, accès à l'installation et au partage Samba.
 
 Le succès des contrôles serveur ne remplace pas ce test physique.
 
-## 8. Mettre à jour ou ajouter un média
+## 6. Options
 
-Ajouter ou modifier sa ligne dans `config/media.conf`, puis rejouer :
+### Disque de données dédié
 
-```bash
-sudo ./scripts/40-download-media.sh
-sudo ./scripts/60-publish-media.sh
-sudo ./scripts/70-enable-and-validate.sh
-```
-
-Avec `generic-pxe-sync.service` actif, un simple redémarrage du serveur suffit aussi : le service rejoue ces trois étapes automatiquement au boot. Pour forcer la synchronisation sans redémarrer :
+Par défaut les images vont dans `/srv/bits-data`, sur le disque système. Pour
+un disque dédié, renseigner dans `pxe.env` `PXE_DATA_DISK` et
+`PXE_DATA_PARTITION` avec des chemins `/dev/disk/by-id/...`, puis :
 
 ```bash
-sudo systemctl start generic-pxe-sync.service
-sudo journalctl -u generic-pxe-sync.service
+sudo bits-pxe-install --prepare-data-disk
 ```
 
-Pour un changement d'adresse IP ou de sous-réseau, modifier toutes les valeurs réseau de `config/pxe.env`, appliquer le réseau, puis rejouer les scripts `50`, `60` et `70`. Cette étape reconstruit les deux chargeurs iPXE et recalcule notamment la directive `dhcp-range` à partir de `PXE_SUBNET_CIDR`.
+**Cette commande efface entièrement le disque** désigné. Elle refuse le disque
+qui porte `/`.
 
-## 9. Sauvegarder la configuration
+### Réseau géré par BITS (Ubuntu)
 
-Conserver hors du serveur :
+Avec `PXE_MANAGE_NETWORK=yes`, `PXE_ADDRESS_CIDR`, `PXE_GATEWAY` et `PXE_DNS`,
+BITS écrit une configuration Netplan statique et l'applique par `netplan try`,
+avec retour automatique.
 
-- ce dossier et les deux fichiers de configuration finalisés ;
-- les empreintes officielles des médias ;
-- la sortie de `lsblk` et les identifiants stables du disque ;
-- le résultat du test physique BIOS/UEFI.
+### Chargeurs iPXE compilés
 
-Les ISO et ZIP peuvent être retéléchargés : ils ne sont pas nécessaires dans la sauvegarde du playbook.
+`PXE_IPXE_COMPILE=yes` compile iPXE au commit `IPXE_GIT_COMMIT` avec le script
+embarqué `config/boot.ipxe` (demande git, gcc et liblzma-dev).
+`PXE_IPXE_PREBUILT` désigne des chargeurs déjà compilés par
+`tools/construire-ipxe.sh`.
+
+## 7. Arrêter
+
+```bash
+sudo bitsctl disable
+```
+
+Le serveur cesse de répondre aux démarrages PXE et ne republie plus au
+démarrage. `sudo bitsctl apply` le remet en service.
+
+## 8. Sans le paquet, depuis le dépôt
+
+```bash
+cp config/pxe.env.example config/pxe.env
+cp config/media.conf.example config/media.conf
+# activer des images dans config/media.conf
+sudo ./scripts/install.sh
+```
+
+Les dépendances ne sont alors pas tirées par apt : installer au préalable
+`dnsmasq-base nginx nfs-kernel-server ipxe curl python3 unzip`. Chaque script
+de `scripts/` reste exécutable seul, pour le diagnostic.

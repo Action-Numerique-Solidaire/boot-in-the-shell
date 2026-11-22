@@ -1,23 +1,52 @@
 # Tests
 
-Trois niveaux, la même commande pour un contributeur et pour la CI :
+Chaque élément s'éprouve seul, avec la même commande chez un contributeur et
+en CI :
 
 ```bash
-# construire l'image à tester
-cd "04 - live-iso" && sudo ./build-iso.sh /srv/bits-test/boot-in-the-shell-live.iso
+./packaging/build-deb.sh 0.0.0+essai out/debs
 
-# niveaux 1 et 2 : aucun privilège requis
-tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
+# 1. les paquets, installés par le vrai apt d'un Debian 13 vierge (conteneur)
+tests/paquet-deb.sh out/debs/bits-pxe-server_*.deb out/debs/bits-web_*.deb
 
-# les trois niveaux
-sudo tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
+# 2. le dépôt apt (voir plus bas)
+./packaging/build-apt-repo.sh out/apt test out/debs/*.deb
+tests/depot-apt.sh out/apt
+
+# 3. de bout en bout : vrai Debian 13, publication par l'interface web,
+#    clients PXE BIOS et UEFI qui démarrent Killbit
+sudo tests/e2e-paquet.sh out/debs/bits-pxe-server_*.deb out/debs/bits-web_*.deb [killbit-live.iso]
 ```
 
-| Niveau | Ce que ça prouve | Prérequis | Durée mesurée |
+| Test | Ce que ça prouve | Prérequis | Durée mesurée |
 |---|---|---|---|
-| 1. `boot-test.sh … bios` | l'ISO démarre réellement sur un firmware legacy | `qemu-system-x86` | **21 s** avec KVM |
-| 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | **46 s** avec KVM |
-| 3. `e2e-pxe.sh` | le serveur s'installe **seul** et des clients BIOS **et** UEFI démarrent dessus | root, libvirt, réseau sortant | dizaines de minutes |
+| `paquet-deb.sh` | installation par apt ; rien n'est activé ; `bitsctl` ; réseau déduit ; chargeurs iPXE du paquet `ipxe` ; site nginx, service web sous son utilisateur, ce que sudo lui accorde et lui refuse, garde CSRF ; purge | docker | **42 s** |
+| `depot-apt.sh` | le dépôt est lu par apt, chaque paquet a un candidat BITS, ses dépendances se résolvent ; signature vérifiée si le dépôt est signé | docker | **12 s** |
+| `e2e-paquet.sh` | Debian 13 réel (image cloud) ; Killbit activé et publié par l'interface web ; clients BIOS et UEFI : menu, choix de Killbit, noyau et initrd en HTTP, racine en NFS ; après redémarrage du serveur, publication rejouée et adresse affichée sur la console | root, libvirt, KVM, `sshpass`, accès sortant | **2 min 42** avec KVM |
+
+Mesures du 2026-11-22 sur arkantos, KVM, image Killbit locale : serveur prêt
+en 71 à 106 s (dont 48 s d'installation des paquets), publication par
+l'interface en 7 s, client BIOS au menu en 12 s puis racine NFS montée 7 s
+après le choix, client UEFI au menu en 30 s puis 7 s ; après redémarrage du
+serveur, publication rejouée en 7 s. Total : 2 min 42.
+
+`paquet-deb.sh` et `depot-apt.sh` tournent en CI (`paquet.yml`, `depot-apt.yml`).
+`e2e-paquet.sh` demande KVM : il se lance en local.
+
+### Ce que `e2e-paquet.sh` a trouvé à sa première exécution
+
+1. L'étape 60 appliquait les exports NFS **avant** de créer les points de
+   montage : `exportfs` refusait, la publication échouait.
+2. Elle écrivait `/etc/samba/bits-shares.conf` même sans samba installé, donc
+   sans `/etc/samba`.
+3. La **republication** — qui a lieu à chaque démarrage — échouait :
+   `install -d -m` tentait un `chmod` sur l'image déjà montée en lecture seule.
+
+Et deux pièges du labo lui-même, à connaître pour écrire un test du même genre :
+libvirt ne crée pas de carte vidéo si le domaine n'en déclare pas, et le GRUB
+de l'image cloud Debian boucle alors sans jamais lancer le noyau ;
+`serial-getty` révoque les descripteurs ouverts sur `/dev/ttyS0`, donc un
+script qui y écrit devient muet — les marqueurs passent par `/dev/kmsg`.
 
 ## Dépôt apt
 
@@ -39,7 +68,14 @@ et apt vérifie réellement la signature ; un `Release` altéré fait échouer l
 test. Sans accès aux miroirs, le contrôle des dépendances est **IGNORÉ** et le
 script sort en 77. Demande docker. Mesuré : 12 s.
 
-## Clé USB (ISO live, obsolète)
+## ISO live et clé USB (obsolètes)
+
+Ces tests concernent l'ancienne ISO live, remplacée par les paquets. Ils
+restent utilisables :
+
+```bash
+tests/run-all.sh /chemin/boot-in-the-shell-live.iso
+```
 
 Deux modes s'ajoutent pour la clé USB :
 

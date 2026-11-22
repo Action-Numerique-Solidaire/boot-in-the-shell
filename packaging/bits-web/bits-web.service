@@ -1,0 +1,18 @@
+[Unit]
+Description=BITS : interface web du serveur PXE
+After=network.target
+
+[Service]
+Type=simple
+User=bits-web
+Group=bits-web
+ExecStart=/usr/bin/python3 -I /usr/share/bits-web/bits-web.py
+Restart=on-failure
+RestartSec=3
+# Pas de NoNewPrivileges : le service passe par sudo pour les trois commandes
+# que /etc/sudoers.d/bits-web lui accorde.
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

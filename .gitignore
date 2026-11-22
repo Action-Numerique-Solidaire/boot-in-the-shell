@@ -9,3 +9,4 @@ build/
 
 # Outillage de session
 .claude/
+__pycache__/
