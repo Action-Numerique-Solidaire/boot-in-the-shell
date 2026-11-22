@@ -21,7 +21,9 @@ ISO="${1:?Usage: boot-test.sh <image> [bios|uefi] [timeout_s] [cdrom|disque]}"
 MODE="${2:-bios}"
 TIMEOUT="${3:-900}"
 SUPPORT="${4:-cdrom}"
-MARKER="BITS-LIVE-READY"
+# Expression régulière étendue. Par défaut, le marqueur de l'ISO live ; pour
+# l'ISO d'amorçage (--console-serie), la barre d'état de l'installateur Debian.
+MARKER="${BITS_BOOT_MARKER:-BITS-LIVE-READY}"
 # Motifs d'échec : sans eux, un noyau qui panique ne se distingue pas d'un
 # démarrage lent, et le test attendrait son délai entier pour rien.
 FAILURES='Kernel panic|Attempted to kill init|No init found|Failed to mount|Entering emergency mode|You are in emergency mode|Unable to find a medium'
@@ -107,8 +109,8 @@ while (( SECONDS < deadline )); do
     echo "[boot-test] QEMU s'est arrete avant le marqueur"
     break
   fi
-  if grep -qa "$MARKER" "$log" 2>/dev/null; then
-    echo "[boot-test] MARQUEUR TROUVE apres $(( SECONDS - started ))s : $(grep -ha "$MARKER" "$log" | head -1)"
+  if grep -qaE "$MARKER" "$log" 2>/dev/null; then
+    echo "[boot-test] MARQUEUR TROUVE apres $(( SECONDS - started ))s : $(grep -haoE ".{0,30}($MARKER).{0,30}" "$log" | head -1)"
     status=0
     break
   fi

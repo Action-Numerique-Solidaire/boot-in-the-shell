@@ -1,10 +1,12 @@
-name: Publication (paquet .deb)
+name: Publication (paquets .deb et ISO d'amorçage)
 
-# Produit le paquet et le publie en release, une par tag. Le dépôt apt, lui,
-# est publié par depot-apt.yml sur les mêmes tags.
+# Produit les paquets et l'ISO d'amorçage et les publie en release, une par
+# tag. Le dépôt apt, lui, est publié par depot-apt.yml sur les mêmes tags.
 #
-# L'ISO live n'est plus construite ici : l'installation passe désormais par le
-# paquet apt (voir le README). Son script reste dans « 04 - live-iso ».
+# L'ISO d'amorçage installe un Debian qui tire ses paquets du dépôt du MÊME
+# canal : stable pour un tag v*, test pour un tag test-*.
+#
+# L'ISO live n'est plus construite : son script reste dans « 04 - live-iso ».
 #
 # Déclenchement : un TAG fonctionne depuis N'IMPORTE QUELLE branche, y compris
 # une branche de travail — GitHub exécute le workflow tel qu'il existe au
@@ -32,7 +34,7 @@ permissions:
 jobs:
   publier:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: write       # nécessaire pour créer la release
 
@@ -88,6 +90,28 @@ jobs:
             ./etc/sudoers.d/bits-web ./usr/lib/systemd/system/bits-web.service
           sudo apt-get install -y --no-install-recommends lintian >/dev/null 2>&1 || true
           if command -v lintian >/dev/null; then lintian out/*.deb || true; fi
+
+      # --- ISO d'amorçage : ~15 s de construction ----------------------------
+      - name: Construire l'ISO d'amorçage
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso cpio qemu-system-x86 ovmf debian-archive-keyring
+          if [ "${{ steps.v.outputs.stable }}" = "true" ]; then canal=stable; else canal=test; fi
+          "05 - bootstrap-iso/build-bootstrap-iso.sh" out/bits-amorcage.iso --canal "$canal"
+          rm -f out/bits-amorcage.iso.sha256   # SHA256SUMS couvre tous les fichiers
+          # Variante à console série, pour le seul contrôle d'amorçage : non publiée.
+          "05 - bootstrap-iso/build-bootstrap-iso.sh" "$RUNNER_TEMP/bits-amorcage-serie.iso" \
+            --canal "$canal" --test --console-serie
+
+      # Une release ne doit pas contenir une ISO qui ne démarre pas : la barre
+      # d'état de l'installateur prouve firmware, chargeur, noyau et initrd.
+      - name: Démarrage réel de l'ISO d'amorçage (BIOS puis UEFI)
+        run: |
+          set -Eeuo pipefail
+          for mode in bios uefi; do
+            BITS_BOOT_MARKER='1\*installer' tests/boot-test.sh "$RUNNER_TEMP/bits-amorcage-serie.iso" "$mode" 600 disque
+          done
 
       # --- empreintes et récapitulatif --------------------------------------
       - name: Empreintes
@@ -147,6 +171,19 @@ jobs:
           \`\`\`
 
           Les dépendances (dnsmasq, nginx, nfs-kernel-server…) sont tirées par apt.
+
+          ## ISO d'amorçage : un PC entier en serveur PXE
+
+          \`bits-amorcage.iso\` (~65 Mo) installe Debian 13 minimal sur le disque
+          interne, **entièrement effacé**, puis BITS depuis le dépôt de ce canal.
+          SSH root / mot de passe \`admin\`, mises à jour automatiques, adresse de
+          l'interface web affichée sur la console. Le menu de la clé n'a pas de
+          choix par défaut : il faut choisir l'entrée d'installation.
+
+          \`\`\`bash
+          lsblk -o NAME,SIZE,MODEL,TRAN    # la clé : TRAN = usb
+          sudo dd if=bits-amorcage.iso of=/dev/sdX bs=4M conv=fsync status=progress
+          \`\`\`
 
           ## Vérifier les empreintes
 

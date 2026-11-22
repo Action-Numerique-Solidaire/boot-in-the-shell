@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Fabrique une clé USB « Boot in the Shell » autonome.
+# Fabrique une clé USB « Boot in the Shell ».
+#
+# ISO d'amorçage (05 - bootstrap-iso) — le cas normal :
+#   sudo tools/creer-cle-usb.sh --iso bits-amorcage.iso --cible /dev/sdX \
+#        --sans-donnees --confirmer EFFACER
+#
+# L'ISO est écrite telle quelle, avec les garde-fous ci-dessous (refus du
+# disque système, d'un disque non amovible, d'une partition montée). Les images
+# à servir arrivent ensuite par l'interface web du serveur installé.
+#
+# Ancienne ISO live (obsolète), avec médias embarqués :
 #
 # La clé porte deux partitions :
 #   1. l'ISO live, écrite telle quelle — c'est elle qui démarre ;
@@ -22,7 +32,7 @@
 # vrai périphérique.
 set -Eeuo pipefail
 
-ISO=""; CIBLE=""; IPXE_DIR=""; CONFIRME=""; AUTORISER_FIXE=0
+ISO=""; CIBLE=""; IPXE_DIR=""; CONFIRME=""; AUTORISER_FIXE=0; SANS_DONNEES=0
 MEDIAS=()
 
 while [[ $# -gt 0 ]]; do
@@ -33,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --media)           MEDIAS+=("${2:?}"); shift 2 ;;
     --confirmer)       CONFIRME="${2:?}"; shift 2 ;;
     --autoriser-fixe)  AUTORISER_FIXE=1; shift ;;
+    --sans-donnees)    SANS_DONNEES=1; shift ;;
     *) echo "Option inconnue : $1" >&2; exit 2 ;;
   esac
 done
@@ -79,6 +90,12 @@ log "Écriture de l'ISO ($(numfmt --to=iec "$taille_iso")) sur $CIBLE"
 # périphérique bloc.
 dd if="$ISO" of="$CIBLE" bs=4M conv=fsync,notrunc status=progress
 sync
+
+if (( SANS_DONNEES )); then
+  [[ -z "$IPXE_DIR" && ${#MEDIAS[@]} -eq 0 ]] || die "--ipxe et --media n'ont pas de sens avec --sans-donnees."
+  log "Clé prête : $CIBLE (ISO seule, sans partition de données)"
+  exit 0
+fi
 
 if [[ -z "$cible_bloc" ]]; then
   boucle="$(losetup --find --show --partscan "$CIBLE")"

@@ -1,0 +1,51 @@
+name: ISO d'amorçage (construction et démarrage)
+
+# Construit l'ISO d'amorçage et vérifie qu'elle démarre réellement jusqu'à
+# l'installateur Debian, en BIOS puis en UEFI, présentée comme une clé USB.
+#
+# L'installation complète (tests/e2e-iso.sh) demande KVM et une dizaine de
+# minutes : elle se lance en local.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - '05 - bootstrap-iso/**'
+      - 'tests/boot-test.sh'
+      - '.github/workflows/amorcage.yml'
+  pull_request:
+    paths:
+      - '05 - bootstrap-iso/**'
+      - 'tests/boot-test.sh'
+      - '.github/workflows/amorcage.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  amorcage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dépendances
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xorriso cpio qemu-system-x86 ovmf debian-archive-keyring
+
+      - name: Construire l'ISO (et la variante à console série)
+        run: |
+          set -Eeuo pipefail
+          "05 - bootstrap-iso/build-bootstrap-iso.sh" out/bits-amorcage.iso
+          # Console série : seul moyen de lire l'installateur depuis QEMU.
+          "05 - bootstrap-iso/build-bootstrap-iso.sh" out/bits-amorcage-serie.iso --test --console-serie
+          ls -lh out/
+
+      # La barre d'état de l'installateur Debian (« 1*installer ») prouve la
+      # chaîne entière : firmware, chargeur, noyau, initrd et installateur.
+      - name: Démarrage réel BIOS (clé USB)
+        run: BITS_BOOT_MARKER='1\*installer' tests/boot-test.sh out/bits-amorcage-serie.iso bios 600 disque
+
+      - name: Démarrage réel UEFI (clé USB)
+        run: BITS_BOOT_MARKER='1\*installer' tests/boot-test.sh out/bits-amorcage-serie.iso uefi 600 disque

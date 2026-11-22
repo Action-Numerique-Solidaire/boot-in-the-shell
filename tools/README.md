@@ -1,9 +1,29 @@
 # Outils de fabrication
 
-Deux scripts, pour produire une clé USB « Boot in the Shell » qui monte son
-serveur PXE **sans accès internet**.
+## Graver l'ISO d'amorçage (cas normal)
 
-## Pourquoi ces outils existent
+```bash
+sudo tools/creer-cle-usb.sh --iso bits-amorcage.iso --cible /dev/sdX \
+     --sans-donnees --confirmer EFFACER
+```
+
+L'ISO d'amorçage (`05 - bootstrap-iso`, ou la release) est écrite telle quelle.
+L'outil refuse le disque qui porte `/`, un disque non amovible (sauf
+`--autoriser-fixe`) et un disque dont une partition est montée. Un `dd` direct
+fonctionne aussi, sans ces garde-fous.
+
+`construire-ipxe.sh` reste utile pour qui veut des chargeurs iPXE compilés
+avec le script de BITS (`PXE_IPXE_PREBUILT`) ; le paquet utilise par défaut
+ceux du paquet `ipxe` de la distribution.
+
+---
+
+## Ancienne clé « ISO live + médias » (obsolète)
+
+La suite décrit la clé de l'ISO live, qui montait son serveur PXE **sans accès
+internet**. Elle est remplacée par l'ISO d'amorçage et les paquets.
+
+### Pourquoi ces outils existaient
 
 L'ISO live seule ne suffit pas. Au premier démarrage, l'assistant joue le
 pipeline d'installation, qui télécharge les médias et **compile iPXE**. Sur un
@@ -21,7 +41,7 @@ Une clé fabriquée ici porte donc deux partitions :
 L'assistant retrouve la partition par son **étiquette**, y compris sur le média
 de démarrage, et réutilise son contenu sans rien effacer.
 
-## 1. Compiler les chargeurs iPXE
+### 1. Compiler les chargeurs iPXE
 
 ```bash
 sudo tools/construire-ipxe.sh /chemin/sortie
@@ -38,7 +58,7 @@ viennent de la réponse DHCP. C'est ce qui permet de compiler les chargeurs une
 seule fois et de les livrer avec la clé — auparavant l'adresse du serveur était
 figée à la compilation, donc un chargeur ne valait que pour un serveur.
 
-## 2. Fabriquer la clé
+### 2. Fabriquer la clé
 
 ```bash
 sudo tools/creer-cle-usb.sh \
@@ -59,14 +79,14 @@ Le script calcule l'empreinte SHA-256 de chaque fichier **réellement copié** e
 l'écrit dans le catalogue. L'étape 40 du pipeline la vérifie et, le fichier
 étant déjà présent, ne télécharge rien.
 
-### Garde-fous
+#### Garde-fous
 
 - refus si la cible porte le système racine ;
 - refus si la cible n'est pas amovible, sauf `--autoriser-fixe` ;
 - refus si une partition de la cible est montée ;
 - `--confirmer EFFACER` obligatoire : la commande efface la cible entièrement.
 
-### Tester avant de toucher au matériel
+#### Tester avant de toucher au matériel
 
 `--cible` accepte un **fichier** ordinaire. La clé est alors fabriquée dans une
 image, que l'on peut éprouver en machine virtuelle :
@@ -83,7 +103,7 @@ tests/boot-test.sh /tmp/cle.img uefi 900 disque
 sudo BITS_E2E_CLE=1 tests/e2e-pxe.sh /tmp/cle.img
 ```
 
-## Au démarrage de la clé
+### Au démarrage de la clé
 
 1. Le système live démarre et annonce `BITS-LIVE-READY` sur la console.
 2. L'assistant trouve la partition `PXE_DATA`, propose la configuration réseau
@@ -94,7 +114,7 @@ sudo BITS_E2E_CLE=1 tests/e2e-pxe.sh /tmp/cle.img
    `menu.ipxe` se termine par `choose`, sans délai ni entrée par défaut, donc le
    menu attend l'opérateur.
 
-## Limite connue
+### Limite connue
 
 La publication recopie chaque média de `downloads/` vers `iso/` sur la même
 partition. Une image de 3,9 Go occupe donc 7,8 Go sur la clé. C'est le
