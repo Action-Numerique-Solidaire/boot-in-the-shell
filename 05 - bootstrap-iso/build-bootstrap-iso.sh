@@ -53,7 +53,7 @@ case "$CANAL" in
   *)      die "canal inconnu : $CANAL" ;;
 esac
 [[ "$DEPOT" == */ ]] || DEPOT="$DEPOT/"
-for c in curl xorriso cpio gzip sha256sum; do command -v "$c" >/dev/null || die "commande absente : $c"; done
+for c in curl xorriso cpio gzip xz sha256sum; do command -v "$c" >/dev/null || die "commande absente : $c"; done
 
 # --- 1. mini.iso de Debian 13, vérifié ---------------------------------------------
 install -d -m 0755 "$CACHE"
@@ -109,12 +109,53 @@ install -m 0755 "$SCRIPT_DIR/preseed/choisir-disque.sh" "$TRAVAIL/racine/bits/"
 install -m 0755 "$SCRIPT_DIR/preseed/late.sh"           "$TRAVAIL/racine/bits/"
 printf "BITS_DEPOT='deb [trusted=yes] %s ./'\n" "$DEPOT" > "$TRAVAIL/racine/bits/bits.conf"
 
+# --- firmwares des cartes réseau -----------------------------------------------------
+# Le mini.iso n'embarque AUCUN firmware : une carte qui en charge un au
+# démarrage (Realtek RTL8125 et certaines RTL8111/8168, Broadcom…) n'est pas
+# utilisable et l'installation échoue dès la détection du réseau — constaté
+# sur une machine réelle. Méthode officielle de Debian : les paquets de
+# firmware dans /firmware de l'initrd. L'installateur y prend celui que la
+# carte demande, et l'installe aussi dans le système, sinon la carte
+# retomberait en panne au premier démarrage.
+#
+# Seulement les cartes filaires (~14 Mo), pas les 474 Mo du jeu complet.
+FIRMWARES=(firmware-realtek firmware-bnx2 firmware-bnx2x firmware-intel-misc
+           firmware-misc-nonfree firmware-qlogic firmware-netronome)
+log "Firmwares réseau : ${FIRMWARES[*]}"
+install -d -m 0755 "$CACHE/firmware" "$TRAVAIL/racine/firmware"
+index=""
+for chemin in non-free-firmware/binary-all/Packages.xz non-free-firmware/binary-amd64/Packages.xz; do
+  curl -fsSL "$DEBIAN_ARCHIVE/$chemin" -o "$TRAVAIL/Packages.xz" || continue
+  # Index vérifié contre InRelease quand sa signature l'a été.
+  if (( verifie )); then
+    h="$(awk -v f="$chemin" '/^SHA256:/ { s = 1; next } /^[A-Za-z]/ { s = 0 } s && $3 == f { print $1; exit }' "$CACHE/InRelease")"
+    echo "$h  $TRAVAIL/Packages.xz" | sha256sum -c --status - || die "$chemin ne correspond pas à InRelease"
+  fi
+  xz -dc "$TRAVAIL/Packages.xz" >> "$TRAVAIL/Packages"
+  index+=" $chemin"
+done
+[[ -s "$TRAVAIL/Packages" ]] || die "index non-free-firmware introuvable"
+for paquet in "${FIRMWARES[@]}"; do
+  read -r fichier somme < <(awk -v p="$paquet" '
+    /^Package: / { cur = $2 } /^Filename: / { f = $2 } /^SHA256: / { h = $2 }
+    /^$/ { if (cur == p && f) { print f, h; exit } cur = ""; f = ""; h = "" }' "$TRAVAIL/Packages")
+  [[ -n "${fichier:-}" && "${somme:-}" =~ ^[0-9a-f]{64}$ ]] || die "$paquet absent de l'index non-free-firmware"
+  local_deb="$CACHE/firmware/$(basename "$fichier")"
+  if [[ ! -f "$local_deb" ]] || ! echo "$somme  $local_deb" | sha256sum -c --status -; then
+    curl -fsSL "https://deb.debian.org/debian/$fichier" -o "$local_deb.part"
+    echo "$somme  $local_deb.part" | sha256sum -c --status - || die "empreinte incorrecte : $fichier"
+    mv -f "$local_deb.part" "$local_deb"
+  fi
+  install -m 0644 "$local_deb" "$TRAVAIL/racine/firmware/"
+done
+echo "  ${#FIRMWARES[@]} paquets, $(du -sh "$TRAVAIL/racine/firmware" | cut -f1), vérifiés contre l'index${index}"
+
 log "Preseed (dépôt : $DEPOT)"
 xorriso -osirrox on -indev "$CACHE/mini.iso" -extract /initrd.gz "$TRAVAIL/initrd.gz" >/dev/null 2>&1
 chmod u+w "$TRAVAIL/initrd.gz"
 # Le noyau accepte plusieurs archives cpio compressées mises bout à bout :
 # l'initrd d'origine reste intact, /bits y est simplement ajouté.
-(cd "$TRAVAIL/racine" && find preseed.cfg bits -print | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet) \
+(cd "$TRAVAIL/racine" && find preseed.cfg bits firmware -print | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet) \
   | gzip -9 -n >> "$TRAVAIL/initrd.gz"
 
 # --- 3. menus d'amorçage ---------------------------------------------------------------

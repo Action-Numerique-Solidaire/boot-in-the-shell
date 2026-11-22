@@ -3,8 +3,11 @@
 Une clé USB qui transforme n'importe quel PC en serveur PXE Boot in the Shell.
 Pour s'en servir, pas à pas : [GUIDE-INSTALLATION.md](../GUIDE-INSTALLATION.md).
 
-L'ISO est le `mini.iso` officiel de Debian 13 (installation par le réseau,
-~65 Mo) avec un preseed. Elle n'embarque aucun paquet : tout vient du réseau
+L'ISO est le `mini.iso` officiel de Debian 13 (installation par le réseau)
+avec un preseed et les firmwares des cartes réseau filaires courantes
+(~79 Mo). Sans ces firmwares, une carte Realtek ou Broadcom qui en charge
+un au démarrage n'est pas vue, et l'installation échoue dès la détection du
+réseau : constaté sur une machine réelle. Elle n'embarque aucun paquet : tout vient du réseau
 pendant l'installation, et le serveur se met ensuite à jour seul.
 
 ## Ce que fait la clé
