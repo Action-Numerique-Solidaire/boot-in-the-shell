@@ -19,6 +19,28 @@ sudo tests/run-all.sh /srv/bits-test/boot-in-the-shell-live.iso
 | 2. `boot-test.sh … uefi` | ... et sur un firmware récent | `qemu-system-x86`, `ovmf` | **46 s** avec KVM |
 | 3. `e2e-pxe.sh` | le serveur s'installe **seul** et des clients BIOS **et** UEFI démarrent dessus | root, libvirt, réseau sortant | dizaines de minutes |
 
+## Dépôt apt
+
+```bash
+./packaging/build-deb.sh 0.0.0+essai out/debs
+./packaging/build-apt-repo.sh out/apt test out/debs/*.deb
+tests/depot-apt.sh out/apt
+
+# le dépôt publié, tel que GitHub le sert
+tests/depot-apt.sh --distant \
+  https://github.com/Action-Numerique-Solidaire/boot-in-the-shell/releases/download/apt-test/
+```
+
+Le vrai apt d'un Debian 13 vierge, dans un conteneur `debian:trixie` : il lit le
+dépôt, trouve un candidat d'origine BITS pour chaque paquet, puis résout ses
+dépendances contre les miroirs Debian (simulation, rien n'est installé). Si le
+dépôt publie `bits-archive-keyring.gpg`, la source est déclarée en `signed-by`
+et apt vérifie réellement la signature ; un `Release` altéré fait échouer le
+test. Sans accès aux miroirs, le contrôle des dépendances est **IGNORÉ** et le
+script sort en 77. Demande docker. Mesuré : 12 s.
+
+## Clé USB (ISO live, obsolète)
+
 Deux modes s'ajoutent pour la clé USB :
 
 ```bash

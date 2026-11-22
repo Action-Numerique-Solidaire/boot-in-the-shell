@@ -1,0 +1,131 @@
+name: Dépôt apt
+
+# Publie les paquets BITS en dépôt apt, dans les fichiers d'une release
+# dédiée, que apt lit directement :
+#
+#   tag v*     -> release « apt »       canal stable
+#   tag test-* -> release « apt-test »  canal test
+#
+#   deb [trusted=yes] https://github.com/<org>/<dépôt>/releases/download/apt/ ./
+#
+# Deux canaux plutôt qu'un : une version d'essai (0.0.0+horodatage) est
+# toujours inférieure à une version stable, donc les mélanger empêcherait
+# toute mise à jour vers un essai.
+#
+# Signature : si le secret APT_GPG_PRIVATE_KEY existe, le dépôt est signé et la
+# clé publique publiée en bits-archive-keyring.gpg. Sinon il ne l'est pas, et
+# reste servi en HTTPS.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+      - 'test-*'
+
+permissions:
+  contents: read
+
+# Deux tags poussés ensemble ne doivent pas écrire la même release en même temps.
+concurrency:
+  group: depot-apt
+  cancel-in-progress: false
+
+jobs:
+  depot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write       # créer la release du dépôt et y déposer les fichiers
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version et canal
+        id: v
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF_TYPE:$tag" in
+            tag:v[0-9]*) version="${tag#v}"; canal="stable"; release=apt ;;
+            *)           version="0.0.0+$(date -u +%Y%m%d%H%M)"; canal="test"; release=apt-test ;;
+          esac
+          {
+            echo "version=$version"
+            echo "canal=$canal"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version  canal=$canal  release=$release"
+
+      - name: Construire les paquets
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get install -y --no-install-recommends apt-utils >/dev/null
+          ./packaging/build-deb.sh "${{ steps.v.outputs.version }}" out/debs
+
+      - name: Construire le dépôt
+        env:
+          BITS_APT_GPG_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: ./packaging/build-apt-repo.sh out/apt "${{ steps.v.outputs.canal }}" out/debs/*.deb
+
+      # Le même test qu'en local : le vrai apt d'un Debian 13 vierge lit le
+      # dépôt, trouve les paquets et résout leurs dépendances. 77 (contrôle
+      # ignoré) est un échec ici : le runner a accès aux miroirs.
+      - name: Éprouver le dépôt
+        run: tests/depot-apt.sh out/apt
+
+      - name: Publier
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ steps.v.outputs.release }}
+          CANAL: ${{ steps.v.outputs.canal }}
+        run: |
+          set -Eeuo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE/"
+          if ! gh release view "$RELEASE" >/dev/null 2>&1; then
+            notes=$(cat <<NOTES
+          Dépôt apt de Boot in the Shell, canal **$CANAL**. Ces fichiers sont lus par apt : ne pas les modifier à la main.
+
+          \`\`\`bash
+          echo "deb [trusted=yes] $base ./" | sudo tee /etc/apt/sources.list.d/bits.list
+          sudo apt update && sudo apt install bits-pxe-server
+          \`\`\`
+          NOTES
+          )
+            # --latest=false : la release du dépôt ne doit pas passer pour la
+            # dernière version publiée du projet.
+            gh release create "$RELEASE" --prerelease --latest=false \
+              --title "Dépôt apt ($CANAL)" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+
+          cd out/apt
+          # Ordre : paquets, puis index, puis Release en dernier. Un client qui
+          # lit pendant l'envoi voit au pire un Release ancien qui ne référence
+          # que des fichiers déjà présents.
+          gh release upload "$RELEASE" ./*.deb --clobber
+          gh release upload "$RELEASE" Packages Packages.gz --clobber
+          for f in bits-archive-keyring.gpg Release.gpg InRelease; do
+            if [ -f "$f" ]; then gh release upload "$RELEASE" "$f" --clobber; fi
+          done
+          gh release upload "$RELEASE" Release --clobber
+
+          # Retirer ce qui ne fait plus partie du dépôt (anciennes versions,
+          # signature d'un dépôt devenu non signé).
+          gh release view "$RELEASE" --json assets --jq '.assets[].name' | while read -r a; do
+            [ -e "$a" ] || { echo "retrait : $a"; gh release delete-asset "$RELEASE" "$a" -y; }
+          done
+
+          {
+            echo "## Dépôt apt ($CANAL)"
+            echo
+            echo '```'
+            echo "deb [trusted=yes] $base ./"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Le dépôt tel que GitHub le sert réellement, redirections comprises.
+      - name: Éprouver le dépôt publié
+        if: ${{ github.ref_type == 'tag' }}
+        run: |
+          tests/depot-apt.sh --distant \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.v.outputs.release }}/"

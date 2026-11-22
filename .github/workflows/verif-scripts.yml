@@ -35,6 +35,8 @@ jobs:
           fail=0
           for f in "04 - live-iso/build-iso.sh" \
                    "packaging/build-deb.sh" \
+                   "packaging/build-apt-repo.sh" \
+                   "tests/depot-apt.sh" \
                    "03 - prototype-generic/scripts/install.sh" \
                    "04 - live-iso/overlay/usr/local/sbin/generic-pxe-wizard.sh"; do
             if [ ! -x "$f" ]; then
