@@ -33,6 +33,48 @@ serveur, publication rejouée en 7 s. Total : 2 min 42.
 `paquet-deb.sh` et `depot-apt.sh` tournent en CI (`paquet.yml`, `depot-apt.yml`).
 `e2e-paquet.sh` demande KVM : il se lance en local.
 
+## ISO d'amorçage
+
+```bash
+# démarrage jusqu'à l'installateur, BIOS puis UEFI, ISO présentée en clé USB
+"05 - bootstrap-iso/build-bootstrap-iso.sh" /srv/bits-test/serie.iso --test --console-serie
+BITS_BOOT_MARKER='1\*installer' tests/boot-test.sh /srv/bits-test/serie.iso bios 600 disque
+
+# installation complète, UEFI puis BIOS
+"05 - bootstrap-iso/build-bootstrap-iso.sh" /srv/bits-test/test.iso --test
+sudo tests/e2e-iso.sh /srv/bits-test/test.iso uefi bios
+```
+
+`e2e-iso.sh` fait ce que ferait une personne : une VM au disque interne vierge
+démarre sur l'ISO branchée **en clé USB**, Debian s'installe seul depuis le
+réseau, la VM s'arrête au redémarrage de fin d'installation, la clé est
+retirée, la VM redémarre sur son disque. Puis, en SSH root / admin : système
+sur le disque interne et pas sur la clé, paquets venus du dépôt BITS publié,
+publication du premier démarrage, interface web, menu PXE sans choix par
+défaut, adresse et commande SSH sur la console, mises à jour automatiques
+autorisées pour l'origine BITS.
+
+L'installation tire les paquets du dépôt **publié** (`apt-test`), pas de ceux
+construits en local : elle éprouve ce qu'une vraie clé installerait.
+
+Mesures du 2026-11-22, KVM : installation 5 min 31 (UEFI) et 5 min 30 (BIOS),
+puis 21 à 25 s jusqu'à SSH sur le disque interne. Sur GitHub, sans KVM, le
+démarrage jusqu'à l'installateur prend 34 à 51 s.
+
+Ce que ce test a trouvé :
+
+1. `preseed/file=` ne vaut que pour un CD : sur le `mini.iso` (amorçage réseau)
+   le preseed n'était jamais chargé. Il est maintenant à la racine de l'initrd.
+2. Sur une console série, l'installateur ignore la langue préréglée et pose la
+   question : la variante de test reste sur l'écran VGA.
+3. `ca-certificates` manque dans un Debian minimal : apt refusait le dépôt
+   HTTPS de GitHub, les paquets BITS ne s'installaient pas.
+4. Au premier démarrage, la publication partait avant le bail DHCP (interface
+   `allow-hotplug`, que `network-online` n'attend pas avec ifupdown) : serveur
+   PXE arrêté. `bits-sync` attend maintenant l'adresse et réessaie.
+5. Pour le test lui-même : SeaBIOS ne tente que le premier disque dur, donc
+   « disque interne d'abord, clé ensuite » ne démarrait jamais la clé en BIOS.
+
 ### Ce que `e2e-paquet.sh` a trouvé à sa première exécution
 
 1. L'étape 60 appliquait les exports NFS **avant** de créer les points de

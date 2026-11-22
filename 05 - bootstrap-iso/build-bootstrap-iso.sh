@@ -159,7 +159,10 @@ label manuel
 
 label local
   menu label Demarrer sur le ^disque local
-  localboot 0x80
+  # -1 : rendre la main au BIOS, qui passe au périphérique suivant. Avec
+  # 0x80, c'est la clé elle-même qui serait relancée : démarrée depuis la
+  # clé, le BIOS la présente comme premier disque.
+  localboot -1
 EOF
 
 cat > "$TRAVAIL/grub.cfg" <<EOF

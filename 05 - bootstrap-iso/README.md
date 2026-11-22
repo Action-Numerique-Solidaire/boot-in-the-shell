@@ -1,6 +1,7 @@
 # ISO d'amorçage
 
 Une clé USB qui transforme n'importe quel PC en serveur PXE Boot in the Shell.
+Pour s'en servir, pas à pas : [GUIDE-INSTALLATION.md](../GUIDE-INSTALLATION.md).
 
 L'ISO est le `mini.iso` officiel de Debian 13 (installation par le réseau,
 ~65 Mo) avec un preseed. Elle n'embarque aucun paquet : tout vient du réseau

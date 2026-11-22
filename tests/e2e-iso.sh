@@ -247,10 +247,11 @@ EOF
     "${SSH[@]}" 'apt-config dump | grep -q "APT::Periodic::Unattended-Upgrade \"1\""'
   # Au premier démarrage, apt-daily peut tenir le verrou d'apt : la simulation
   # s'arrête alors avant d'afficher les origines autorisées. On la refait
-  # jusqu'à ce qu'elle les affiche (5 min au plus).
+  # jusqu'à ce qu'elle les affiche (5 min au plus). LC_ALL=C : le système
+  # installé est en français, et la ligne y devient « Les origines permises ».
   local uu=""
   for _ in $(seq 60); do
-    uu="$("${SSH[@]}" 'unattended-upgrade --dry-run -v 2>&1' || true)"
+    uu="$("${SSH[@]}" 'LC_ALL=C unattended-upgrade --dry-run -v 2>&1' || true)"
     grep -qi "allowed origins" <<<"$uu" && break
     sleep 5
   done

@@ -1,6 +1,9 @@
 # boot-in-the-shell
 Solution open source dédiée au démarrage réseau, au déploiement et à la maintenance de systèmes informatiques, développée par Action Numérique Solidaire (ANS) pour faciliter le reconditionnement et le réemploi numérique.
 
+**Installer un serveur : [GUIDE-INSTALLATION.md](GUIDE-INSTALLATION.md)**, pas à pas,
+de la préparation de la clé USB au premier poste démarré sur le réseau.
+
 ## Deux façons d'avoir un serveur PXE
 
 **Un PC dédié, depuis une clé USB.** Graver `bits-amorcage.iso` (fichier de
@@ -31,6 +34,7 @@ tag `v*`. D'ici là, utiliser le canal d'essai, `download/apt-test/`.
 
 | Document | Pour qui |
 |---|---|
+| [GUIDE-INSTALLATION.md](GUIDE-INSTALLATION.md) | Installer un serveur PXE permanent depuis une clé USB, pas à pas |
 | [05 - bootstrap-iso/README.md](05%20-%20bootstrap-iso/README.md) | La clé USB d'installation : ce qu'elle fait, la construire, la graver |
 | [03 - prototype-generic/PLAYBOOK.md](03%20-%20prototype-generic/PLAYBOOK.md) | Installer et exploiter le serveur PXE (paquets, `bitsctl`, interface web) |
 | [tests/README.md](tests/README.md) | Éprouver chaque élément : paquets, dépôt apt, ISO, chaîne PXE complète |
