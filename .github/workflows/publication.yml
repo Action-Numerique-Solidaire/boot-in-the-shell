@@ -76,10 +76,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           # Les points d'entrée doivent être présents dans chaque paquet.
+          # Sans « grep -q » : il s'arrête à la première ligne trouvée, tar
+          # reçoit SIGPIPE, et pipefail déclarait absent un fichier présent.
           verifier() {
-            local deb="$1"; shift
+            local deb="$1" contenu; shift
+            contenu="$(dpkg-deb -c "$deb")"
             for f in "$@"; do
-              dpkg-deb -c "$deb" | grep -q " $f\$" \
+              grep -F " $f" <<<"$contenu" >/dev/null \
                 || { echo "::error::$f absent de $(basename "$deb")"; exit 1; }
             done
           }
