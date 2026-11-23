@@ -53,7 +53,7 @@ case "$CANAL" in
   *)      die "canal inconnu : $CANAL" ;;
 esac
 [[ "$DEPOT" == */ ]] || DEPOT="$DEPOT/"
-for c in curl xorriso cpio gzip xz sha256sum; do command -v "$c" >/dev/null || die "commande absente : $c"; done
+for c in curl xorriso cpio gzip xz sha256sum dpkg-deb; do command -v "$c" >/dev/null || die "commande absente : $c"; done
 
 # --- 1. mini.iso de Debian 13, vérifié ---------------------------------------------
 install -d -m 0755 "$CACHE"
@@ -147,8 +147,19 @@ for paquet in "${FIRMWARES[@]}"; do
     mv -f "$local_deb.part" "$local_deb"
   fi
   install -m 0644 "$local_deb" "$TRAVAIL/racine/firmware/"
+  # Index fichier → paquet. Sans lui, check-missing-firmware parcourt les .deb
+  # en cherchant ./lib/firmware/, alors que les paquets de Debian 13 rangent
+  # tout sous ./usr/lib/firmware/ : aucun ne correspond et rien n'est chargé
+  # (constaté sur un Dell OptiPlex 3060). Les images officielles fournissent
+  # ce même index.
+  dpkg-deb -c "$local_deb" | awk -v deb="$(basename "$local_deb")" '
+    $1 !~ /^d/ { f = $6; if (sub(/^\.\/(usr\/)?lib\/firmware\//, "", f) && f != "") print f, deb, "non-free-firmware" }' \
+    >> "$TRAVAIL/racine/firmware/Contents-firmware"
 done
+grep -q '^rtl_nic/rtl8168h-2\.fw ' "$TRAVAIL/racine/firmware/Contents-firmware" \
+  || die "index des firmwares incomplet (rtl_nic/rtl8168h-2.fw absent)"
 echo "  ${#FIRMWARES[@]} paquets, $(du -sh "$TRAVAIL/racine/firmware" | cut -f1), vérifiés contre l'index${index}"
+echo "  $(wc -l < "$TRAVAIL/racine/firmware/Contents-firmware") fichiers indexés dans firmware/Contents-firmware"
 
 log "Preseed (dépôt : $DEPOT)"
 xorriso -osirrox on -indev "$CACHE/mini.iso" -extract /initrd.gz "$TRAVAIL/initrd.gz" >/dev/null 2>&1
