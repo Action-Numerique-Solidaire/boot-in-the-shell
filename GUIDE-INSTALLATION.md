@@ -111,6 +111,12 @@ Depuis n'importe quel poste du réseau, ouvrir l'adresse affichée
   démarrage réseau (en la téléchargeant si besoin), ou l'en retire.
 - **Récupérer le fichier** : une image téléchargée se récupère aussi depuis le
   navigateur, pour graver une clé sur un autre poste par exemple.
+- **Nouvelle version disponible** : pour une image téléchargée, le serveur
+  vérifie s'il en existe une plus récente (Killbit en publie une à chaque
+  construction ; « Vérifier les mises à jour » relance la vérification).
+  **Mettre à jour** la télécharge, la vérifie et, si l'image est servie, la
+  publie aussitôt. Une version téléchargée mais pas encore servie est marquée
+  « Nouvelle version à publier ».
 - Le journal de l'opération en cours s'affiche en direct.
 
 L'interface n'a **pas d'authentification** : elle convient à un réseau

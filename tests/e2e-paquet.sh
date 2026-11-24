@@ -369,6 +369,20 @@ print(d["publication"]["en_cours"], k["etat"].replace(" ", "_"), der.get("result
     "${SSH[@]}" 'tail -30 /var/log/bits/apply-latest.log' || true
     die "La publication lancée par l'interface n'a pas abouti."
   fi
+  # Version servie notée, et égale à la copie téléchargée : l'interface ne
+  # doit rien proposer à republier.
+  # shellcheck disable=SC2016  # évalué sur le serveur
+  "${SSH[@]}" 'grep -qx "killbit $(cat /srv/bits-data/downloads/killbit-live.iso.sha256)" /var/lib/bits/versions-publiees' \
+    || die "Version publiée de Killbit non notée dans /var/lib/bits/versions-publiees"
+  python3 -c '
+import json, sys
+k = next(m for m in json.loads(sys.argv[1])["medias"] if m["id"] == "killbit")
+assert k["version"] and k["version"] == k["version_publiee"], k
+' "$(curl -fsS --max-time 10 "http://$server_ip/api/etat")" || die "Versions téléchargée et publiée différentes dans l'état"
+  v_json="$(curl -fsS --max-time 60 "http://$server_ip/api/media/killbit/version")" || die "/api/media/killbit/version injoignable"
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["a_jour"] is True and d["flottante"] is True, d' "$v_json" \
+    || die "Dernière version de Killbit : $v_json"
+  echo "  version publiée notée ; dernière version de Killbit vérifiée en amont : à jour"
 fi
 
 # --- 4. Contrôle depuis l'hôte ------------------------------------------------------

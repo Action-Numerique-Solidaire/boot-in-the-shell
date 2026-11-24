@@ -197,12 +197,25 @@ cmd_apply() {
   # « Publié » ne vaut qu'après une publication réussie : la liste des
   # médias prêts (étape 40) ne dit pas que la suite a abouti.
   cp -f "$STATE_DIR/media-prets" "$STATE_DIR/media-publies"
+  noter_versions_publiees
   systemctl enable --quiet bits-sync.service
   if [[ $ecartes -gt 0 ]]; then
     echo "Publié, mais $ecartes média(s) écarté(s) : voir « bitsctl media list ». Journal : $logf" | tee -a "$logf"
     return 3
   fi
   echo "Publication réussie. Journal : $logf" | tee -a "$logf"
+}
+
+# « id empreinte » de chaque média publié : l'interface web compare avec la
+# copie téléchargée pour signaler une nouvelle version pas encore servie.
+noter_versions_publiees() {
+  local id fichier
+  load_config
+  while IFS='|' read -r _ id _ fichier _ _ _; do
+    grep -qxF "$id" "$STATE_DIR/media-publies" || continue
+    printf '%s %s\n' "$id" "$(cat "$PXE_DATA_MOUNT/downloads/$fichier.sha256" 2>/dev/null || echo inconnue)"
+  done < <(liste_catalogue) > "$STATE_DIR/versions-publiees.tmp"
+  mv -f "$STATE_DIR/versions-publiees.tmp" "$STATE_DIR/versions-publiees"
 }
 
 cmd_enable() {

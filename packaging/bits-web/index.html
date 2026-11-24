@@ -114,7 +114,10 @@
     démarrage réseau : pratique pour préparer à l'avance une image de plusieurs gigaoctets.
     Activer une image puis « Appliquer au PXE » : elle est téléchargée si besoin, vérifiée, puis
     ajoutée au menu. Désactivée, elle en est retirée ; le fichier téléchargé est conservé.
-    Le menu n'a pas de choix par défaut : un poste démarré sur le réseau attend qu'on choisisse.</p>
+    Le menu n'a pas de choix par défaut : un poste démarré sur le réseau attend qu'on choisisse.<br>
+    Pour une image téléchargée, le serveur vérifie s'il en existe une version plus récente
+    (Killbit en publie une à chaque construction) : « Mettre à jour » la télécharge, la vérifie et,
+    si l'image est servie, la publie aussitôt.</p>
 </main>
 
 <script>
@@ -122,6 +125,8 @@
 const $ = (id) => document.getElementById(id);
 const ENTETES = { "Content-Type": "application/json", "X-BITS-Requete": "1" };
 let dernierEtat = null, journalPos = 0, journalNom = null, journalTexte = "";
+// Dernière version disponible en amont, par image téléchargée : { id: réponse de /version }.
+const versions = {}, versionsEnCours = new Set();
 
 function octets(n) {
   if (n == null) return "";
@@ -157,6 +162,15 @@ function rendreMedias(etat) {
     if (m.en_telechargement != null) infos.push("téléchargement : " + octets(m.en_telechargement));
     else if (m.telecharge != null) infos.push("téléchargée : " + octets(m.telecharge));
     if (!m.disponible) infos.push("URL à renseigner dans le catalogue");
+    const v = versions[m.id];
+    const nouvelle = v && v.a_jour === false && m.en_telechargement == null;
+    const aRepublier = versionARepublier(m);
+    if (nouvelle) details.append(pastilleTexte("attente", "Nouvelle version disponible"));
+    else if (aRepublier) details.append(pastilleTexte("attente", "Nouvelle version à publier"));
+    if (m.telecharge != null && v) {
+      if (v.a_jour === true) infos.push(v.flottante ? "dernière version" : "version du catalogue");
+      else if (v.erreur) infos.push("dernière version : vérification impossible");
+    }
     for (const t of infos) { const s = document.createElement("span"); s.textContent = t; details.append(s); }
 
     const inter = document.createElement("label");
@@ -177,7 +191,26 @@ function rendreMedias(etat) {
       lien.href = "/telechargements/" + encodeURIComponent(m.fichier);
       lien.setAttribute("download", m.fichier);
       lien.textContent = "Récupérer le fichier (" + octets(m.telecharge) + ")";
+      if (nouvelle) {
+        // Image déjà servie : la nouvelle version est publiée dans la foulée.
+        const servie = m.etat === "publié";
+        const maj = document.createElement("button");
+        maj.textContent = servie ? "Mettre à jour (télécharger et publier)" : "Télécharger la dernière version";
+        maj.disabled = enCours;
+        maj.title = "Dernière version vérifiée le " + v.verifie_le;
+        maj.setAttribute("aria-label", maj.textContent + " : " + m.libelle);
+        maj.addEventListener("click", () => telecharger(m.id, maj, servie));
+        actions.append(maj);
+      }
       actions.append(lien);
+      if (m.version) {
+        const verif = document.createElement("button");
+        verif.textContent = versionsEnCours.has(m.id) ? "Vérification…" : "Vérifier les mises à jour";
+        verif.disabled = versionsEnCours.has(m.id);
+        verif.setAttribute("aria-label", "Vérifier s'il existe une nouvelle version de " + m.libelle);
+        verif.addEventListener("click", () => verifierVersion(m.id, true));
+        actions.append(verif);
+      }
     } else if (m.disponible) {
       const bouton = document.createElement("button");
       const enCoursIci = op && op.type === "téléchargement" && op.id === m.id;
@@ -190,6 +223,40 @@ function rendreMedias(etat) {
     }
     if (actions.childElementCount) carte.append(actions);
     conteneur.append(carte);
+  }
+}
+
+function pastilleTexte(classe, texte) {
+  const p = document.createElement("span");
+  p.className = "pastille " + classe; p.textContent = texte;
+  return p;
+}
+
+// Servie par le PXE, mais une version plus récente est déjà téléchargée.
+function versionARepublier(m) {
+  return m.etat === "publié" && m.version && m.version_publiee && m.version !== m.version_publiee;
+}
+
+async function verifierVersion(id, forcer) {
+  if (versionsEnCours.has(id)) return;
+  versionsEnCours.add(id);
+  if (forcer && dernierEtat) rendreMedias(dernierEtat);
+  try {
+    const r = await fetch("/api/media/" + encodeURIComponent(id) + "/version" + (forcer ? "?forcer=1" : ""), { cache: "no-store" });
+    versions[id] = await r.json();
+  } catch (e) {
+    versions[id] = { a_jour: null, erreur: e.message, locale: null };
+  }
+  versionsEnCours.delete(id);
+  if (dernierEtat) rendreMedias(dernierEtat);
+}
+
+// Une vérification par image téléchargée au chargement de la page, puis après
+// chaque nouveau téléchargement (empreinte locale changée).
+function verifierVersions(etat) {
+  if (etat.publication.en_cours) return;
+  for (const m of etat.medias) {
+    if (m.version && m.disponible && (!versions[m.id] || versions[m.id].locale !== m.version)) verifierVersion(m.id, false);
   }
 }
 
@@ -207,7 +274,7 @@ function rendre(etat) {
   });
 
   const p = etat.publication, d = p.derniere;
-  const aPublier = etat.medias.some((m) => m.etat === "à publier" || m.etat === "à retirer");
+  const aPublier = etat.medias.some((m) => m.etat === "à publier" || m.etat === "à retirer" || versionARepublier(m));
   let rond = "", statut, message = "";
   if (p.en_cours) {
     rond = "actif";
@@ -220,7 +287,7 @@ function rendre(etat) {
     if (enTelech) message = enTelech.libelle + " : " + octets(enTelech.en_telechargement) + " téléchargés";
   } else if (aPublier) {
     rond = "alerte"; statut = "Changements à appliquer";
-    message = "Les images marquées « À publier » ou « À retirer » attendent une publication.";
+    message = "Les images marquées « À publier », « À retirer » ou « Nouvelle version à publier » attendent une publication.";
   } else if (!d) {
     statut = "Aucune publication encore"; message = "Activer une image puis « Appliquer ».";
   } else if (d.resultat === "réussie") {
@@ -236,6 +303,7 @@ function rendre(etat) {
   $("appliquer").disabled = p.en_cours;
   $("appliquer").textContent = p.en_cours ? "Opération en cours…" : "Appliquer au PXE";
   rendreMedias(etat);
+  verifierVersions(etat);
 }
 
 // curl réécrit sa ligne de progression avec \r : on ne garde que le dernier état.
@@ -283,10 +351,10 @@ async function basculer(id, active, caseAc) {
   const r = await fetch("/api/etat", { cache: "no-store" }); rendre(await r.json());
 }
 
-async function telecharger(id, bouton) {
+async function telecharger(id, bouton, publier) {
   bouton.disabled = true;
   try {
-    await poster("/api/media/" + encodeURIComponent(id) + "/telecharger");
+    await poster("/api/media/" + encodeURIComponent(id) + "/telecharger", { publier: !!publier });
     journalPos = 0; journalTexte = ""; journalNom = null;
     $("volet-journal").open = true;
     $("erreur").textContent = "";

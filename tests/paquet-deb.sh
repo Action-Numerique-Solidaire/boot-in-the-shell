@@ -21,7 +21,9 @@
 #   8. le service répond, en direct et derrière nginx, sous son utilisateur ;
 #   9. sudo lui accorde l'activation et le téléchargement d'une image, et
 #      refuse « bitsctl apply » ; nginx sert les images téléchargées ;
-#  10. un POST sans l'en-tête X-BITS-Requete est refusé.
+#  10. un POST sans l'en-tête X-BITS-Requete est refusé ;
+#  11. une nouvelle version d'une image à nom fixe est détectée, puis
+#      reconnue à jour une fois téléchargée.
 #
 # Demande docker et l'image debian:trixie.
 set -Eeuo pipefail
@@ -146,6 +148,24 @@ if [[ -f /tmp/bits-web.deb ]]; then
   [[ "$code" == 403 ]] || fail "10 : POST sans en-tête accepté (code $code)"
   grep -E "^yes\|killbit\|" /etc/bits-pxe-server/media.conf >/dev/null || fail "10 : le POST refusé a quand même modifié le catalogue"
   echo "OK 10 : POST sans en-tête refusé"
+
+  # 11. dernière version : une image à nom fixe dont le fichier d empreinte
+  # change à chaque version, comme Killbit.
+  head -c 524288 /dev/urandom > /tmp/maj.iso
+  ( cd /tmp && sha256sum maj.iso > maj.iso.sha256 )
+  echo "no|maj|debian-live-iso|maj.iso|file:///tmp/maj.iso|sha256sums:file:///tmp/maj.iso.sha256|Mise à jour" >> /etc/bits-pxe-server/media.conf
+  version() { curl -fsS "http://127.0.0.1/api/media/maj/version$1" | python3 -c "import json,sys; print(json.load(sys.stdin)[\"a_jour\"])"; }
+  [[ "$(version "")" == None ]] || fail "11 : version annoncée pour une image non téléchargée"
+  bitsctl media download maj >/dev/null 2>&1 || fail "11 : téléchargement de la première version"
+  [[ "$(version "")" == True ]] || fail "11 : copie à jour non reconnue"
+  head -c 524288 /dev/urandom > /tmp/maj.iso
+  ( cd /tmp && sha256sum /tmp/maj.iso > maj.iso.sha256 )   # chemin absolu, comme celui de Killbit
+  [[ "$(version "")" == True ]] || fail "11 : le cache de 10 min n est pas utilisé"
+  [[ "$(version "?forcer=1")" == False ]] || fail "11 : nouvelle version non détectée"
+  bitsctl media download maj >/dev/null 2>&1 || fail "11 : téléchargement de la nouvelle version"
+  cmp -s /tmp/maj.iso /srv/bits-data/downloads/maj.iso || fail "11 : nouvelle version non téléchargée"
+  [[ "$(version "")" == True ]] || fail "11 : à jour après téléchargement"
+  echo "OK 11 : nouvelle version détectée, téléchargée, puis reconnue à jour"
   nginx -s stop
 fi
 

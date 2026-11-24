@@ -33,9 +33,10 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 MEDIA_FILE = os.environ.get("BITS_MEDIA_FILE", "/etc/bits-pxe-server/media.conf")
 CATALOGUE = os.environ.get("BITS_CATALOGUE", "/usr/share/bits-pxe-server/catalogue.conf")
@@ -82,6 +83,8 @@ def lire_catalogue():
                 "id": champs[1],
                 "type": champs[2],
                 "fichier": champs[3],
+                "url": champs[4],
+                "empreinte": champs[5],
                 "libelle": "|".join(champs[6:]),
                 "active": local and champs[0] == "yes",
                 # Une URL à renseigner : l'image ne peut pas être activée telle quelle.
@@ -96,6 +99,78 @@ def lire_ids(nom):
             return {l.strip() for l in f if l.strip()}
     except OSError:
         return set()
+
+
+def lire_texte(chemin):
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def versions_publiees():
+    """{id: empreinte} des médias servis, écrit par « bitsctl apply »."""
+    versions = {}
+    try:
+        with open(os.path.join(STATE_DIR, "versions-publiees"), encoding="utf-8") as f:
+            for l in f:
+                champs = l.split()
+                if len(champs) == 2:
+                    versions[champs[0]] = champs[1]
+    except OSError:
+        pass
+    return versions
+
+
+# --- dernière version disponible ---------------------------------------------------
+
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+CACHE_VERSIONS = 600          # secondes : une vérification par image toutes les 10 min au plus
+_versions = {}                # id -> (instant, résultat)
+_versions_lock = threading.Lock()
+
+
+def empreinte_distante(media):
+    """Empreinte de la version publiée en amont. Une image à nom fixe
+    (Killbit, « latest ») publie un fichier d'empreinte à côté d'elle
+    (sha256sums:<url>) : il change à chaque version. Une empreinte écrite dans
+    le catalogue, elle, ne change qu'avec une mise à jour du paquet."""
+    source = media["empreinte"]
+    if not source.startswith("sha256sums:"):
+        return source.lower(), False
+    url = source[len("sha256sums:"):]
+    # file:/// : catalogue local et tests, comme pour 40-download-media.sh.
+    if not url.startswith(("https://", "file:///")):
+        raise ValueError("URL d'empreinte ni https:// ni file:///")
+    with urllib.request.urlopen(url, timeout=20) as r:
+        texte = r.read(1024 * 1024).decode("utf-8", "replace")
+    # Même règle que 40-download-media.sh : on compare le nom de base, le
+    # fichier de Killbit porte le chemin du runner qui l'a produit.
+    nom = os.path.basename(urlsplit(media["url"]).path)
+    for ligne in texte.splitlines():
+        champs = ligne.split(None, 1)
+        if len(champs) == 2 and os.path.basename(champs[1].strip().lstrip("*")) == nom:
+            return champs[0].lower(), True
+    raise ValueError(f"{nom} absent du fichier d'empreintes")
+
+
+def derniere_version(media, forcer=False):
+    with _versions_lock:
+        cache = _versions.get(media["id"])
+        if cache and not forcer and time.time() - cache[0] < CACHE_VERSIONS:
+            return cache[1]
+    try:
+        sha, flottante = empreinte_distante(media)
+        if not SHA_RE.match(sha):
+            raise ValueError("empreinte invalide")
+        resultat = {"empreinte": sha, "flottante": flottante, "erreur": None}
+    except (OSError, ValueError) as e:
+        resultat = {"empreinte": None, "flottante": None, "erreur": str(e)}
+    resultat["verifie_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with _versions_lock:
+        _versions[media["id"]] = (time.time(), resultat)
+    return resultat
 
 
 def taille(chemin):
@@ -189,6 +264,7 @@ def derniere_publication():
 
 def etat():
     prets, ecartes = lire_ids("media-publies"), lire_ids("media-ecartes")
+    publiees = versions_publiees()
     medias = []
     for m in lire_catalogue():
         chemin = os.path.join(DATA_DIR, "downloads", m["fichier"])
@@ -209,6 +285,10 @@ def etat():
             "telecharge": taille(chemin),
             # Fichier partiel : téléchargement en cours (ou interrompu).
             "en_telechargement": taille(chemin + ".part"),
+            # Empreinte de la copie téléchargée et de celle que sert le PXE :
+            # différentes, une nouvelle version attend la publication.
+            "version": lire_texte(chemin + ".sha256"),
+            "version_publiee": publiees.get(m["id"]) if m["id"] in prets else None,
         })
     try:
         st = os.statvfs(DATA_DIR)
@@ -273,6 +353,29 @@ def lancer_publication():
         return None
 
 
+def publier_apres_telechargement(ident, delai=6 * 3600):
+    """Attend la fin du téléchargement de « ident », puis publie s'il a
+    réussi. Si le service redémarre entre-temps, la publication n'a pas lieu :
+    l'interface signale alors la version à publier, et bits-sync la publie au
+    prochain démarrage."""
+    fin = time.time() + delai
+    time.sleep(1)
+    while publication_en_cours() and time.time() < fin:
+        time.sleep(2)
+    nom = os.path.basename(os.path.realpath(os.path.join(LOG_DIR, "derniere.log")))
+    if not nom.startswith(f"telechargement-{ident}-"):
+        return
+    try:
+        with open(os.path.join(LOG_DIR, nom), encoding="utf-8", errors="replace") as f:
+            lignes = f.read().strip().splitlines()
+    except OSError:
+        return
+    if lignes and lignes[-1].startswith("Téléchargement réussi"):
+        refus = lancer_publication()
+        if refus:
+            sys.stderr.write(f"bits-web : publication après téléchargement de {ident} refusée : {refus}\n")
+
+
 # --- HTTP ------------------------------------------------------------------------
 
 class Gestionnaire(BaseHTTPRequestHandler):
@@ -315,6 +418,20 @@ class Gestionnaire(BaseHTTPRequestHandler):
             except ValueError:
                 depuis = 0
             return self._json(HTTPStatus.OK, journal(depuis))
+        m = re.fullmatch(r"/api/media/([a-z0-9][a-z0-9._-]*)/version", url.path)
+        if m:
+            media = next((x for x in lire_catalogue() if x["id"] == m.group(1)), None)
+            if media is None:
+                return self._json(HTTPStatus.NOT_FOUND, {"erreur": "média inconnu"})
+            forcer = parse_qs(url.query).get("forcer", ["0"])[0] == "1"
+            derniere = derniere_version(media, forcer)
+            locale = lire_texte(os.path.join(DATA_DIR, "downloads", media["fichier"] + ".sha256"))
+            return self._json(HTTPStatus.OK, {
+                **derniere,
+                "locale": locale,
+                # None : rien de téléchargé, ou dernière version inconnue.
+                "a_jour": (locale == derniere["empreinte"]) if locale and derniere["empreinte"] else None,
+            })
         return self._json(HTTPStatus.NOT_FOUND, {"erreur": "introuvable"})
 
     def do_POST(self):
@@ -341,6 +458,13 @@ class Gestionnaire(BaseHTTPRequestHandler):
                     if publication_en_cours():
                         break
                     time.sleep(0.1)
+            with _versions_lock:
+                _versions.pop(m.group(1), None)
+            # Mise à jour d'une image déjà servie : la nouvelle version est
+            # publiée dès qu'elle est téléchargée et vérifiée.
+            if corps.get("publier") is True:
+                threading.Thread(target=publier_apres_telechargement, args=(m.group(1),), daemon=True).start()
+                sortie += " Publication à la suite."
             return self._json(HTTPStatus.ACCEPTED, {"message": sortie})
 
         m = re.fullmatch(r"/api/media/([a-z0-9][a-z0-9._-]*)", url.path)
