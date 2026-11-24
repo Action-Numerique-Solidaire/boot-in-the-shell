@@ -138,20 +138,35 @@ def empreinte_distante(media):
     le catalogue, elle, ne change qu'avec une mise à jour du paquet."""
     source = media["empreinte"]
     if not source.startswith("sha256sums:"):
-        return source.lower(), False
+        return source.lower(), False, None
     url = source[len("sha256sums:"):]
     # file:/// : catalogue local et tests, comme pour 40-download-media.sh.
     if not url.startswith(("https://", "file:///")):
         raise ValueError("URL d'empreinte ni https:// ni file:///")
-    with urllib.request.urlopen(url, timeout=20) as r:
+    # Les redirections disent quelle version est servie : releases/latest/
+    # de GitHub renvoie vers releases/download/<étiquette>/.
+    vues = [url]
+
+    class Suivi(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            vues.append(newurl)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    with urllib.request.build_opener(Suivi).open(url, timeout=20) as r:
         texte = r.read(1024 * 1024).decode("utf-8", "replace")
+    etiquette = None
+    for u in vues:
+        trouve = re.search(r"/releases/download/([^/]+)/", urlsplit(u).path)
+        if trouve:
+            etiquette = trouve.group(1)
+            break
     # Même règle que 40-download-media.sh : on compare le nom de base, le
     # fichier de Killbit porte le chemin du runner qui l'a produit.
     nom = os.path.basename(urlsplit(media["url"]).path)
     for ligne in texte.splitlines():
         champs = ligne.split(None, 1)
         if len(champs) == 2 and os.path.basename(champs[1].strip().lstrip("*")) == nom:
-            return champs[0].lower(), True
+            return champs[0].lower(), True, etiquette
     raise ValueError(f"{nom} absent du fichier d'empreintes")
 
 
@@ -161,12 +176,12 @@ def derniere_version(media, forcer=False):
         if cache and not forcer and time.time() - cache[0] < CACHE_VERSIONS:
             return cache[1]
     try:
-        sha, flottante = empreinte_distante(media)
+        sha, flottante, etiquette = empreinte_distante(media)
         if not SHA_RE.match(sha):
             raise ValueError("empreinte invalide")
-        resultat = {"empreinte": sha, "flottante": flottante, "erreur": None}
+        resultat = {"empreinte": sha, "flottante": flottante, "etiquette": etiquette, "erreur": None}
     except (OSError, ValueError) as e:
-        resultat = {"empreinte": None, "flottante": None, "erreur": str(e)}
+        resultat = {"empreinte": None, "flottante": None, "etiquette": None, "erreur": str(e)}
     resultat["verifie_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
     with _versions_lock:
         _versions[media["id"]] = (time.time(), resultat)

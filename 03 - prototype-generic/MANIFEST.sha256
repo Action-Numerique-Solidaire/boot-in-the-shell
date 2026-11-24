@@ -1,5 +1,5 @@
 e06d242504f434821fc60dfabd5cc057f5a7e082d5532b71095360ca69a4bfc4  ./config/boot.ipxe
-0f764ec195d9696f3e81c82421c90f80e149a1a6e07ee74763b9431459633ab4  ./config/media.conf.example
+dbe74e795f2e58462fedfb8573043d127166de5af1158b1e0bb4b4452925719b  ./config/media.conf.example
 984990c2e6e46740b9f293a45e674182f2a4edc0cd5f7dcace9b7b880c7d3fad  ./config/pxe.env.example
 96032f0547100dce2de93b9df8f7cf2b5615eb2680ac1fac6c2fc20b94120188  ./PLAYBOOK.md
 44ef81bc3de9a5115efe69396f6be42f97d1b4acdc1e11e4ca87caa99ad340ca  ./README.md

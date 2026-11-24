@@ -140,6 +140,12 @@ cat > "$STAGE/DEBIAN/postinst" <<'POSTINST'
 set -e
 if [ "$1" = "configure" ]; then
   install -d -m 0755 /var/lib/bits /var/log/bits /srv/bits-data
+  # media.conf est un conffile, modifié dès qu'une image est activée : une
+  # mise à jour ne le remplace pas. Killbit suivait la pré-release « latest »
+  # (chaque commit) ; on le fait suivre la dernière version publiée.
+  if [ -f /etc/bits-pxe-server/media.conf ]; then
+    sed -i 's#/killbit-image/releases/download/latest/#/killbit-image/releases/latest/download/#g' /etc/bits-pxe-server/media.conf
+  fi
   if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     # Mise à jour d'un serveur déjà en service : republier avec la nouvelle

@@ -165,10 +165,10 @@ function rendreMedias(etat) {
     const v = versions[m.id];
     const nouvelle = v && v.a_jour === false && m.en_telechargement == null;
     const aRepublier = versionARepublier(m);
-    if (nouvelle) details.append(pastilleTexte("attente", "Nouvelle version disponible"));
+    if (nouvelle) details.append(pastilleTexte("attente", "Nouvelle version disponible" + (v.etiquette ? " : " + v.etiquette : "")));
     else if (aRepublier) details.append(pastilleTexte("attente", "Nouvelle version à publier"));
     if (m.telecharge != null && v) {
-      if (v.a_jour === true) infos.push(v.flottante ? "dernière version" : "version du catalogue");
+      if (v.a_jour === true) infos.push(v.flottante ? "dernière version" + (v.etiquette ? " (" + v.etiquette + ")" : "") : "version du catalogue");
       else if (v.erreur) infos.push("dernière version : vérification impossible");
     }
     for (const t of infos) { const s = document.createElement("span"); s.textContent = t; details.append(s); }

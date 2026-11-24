@@ -16,12 +16,15 @@
 #
 # Empreinte : 64 caractères hexadécimaux, ou « sha256sums:<url> » pour la
 # lire au téléchargement dans le fichier publié avec l'image. C'est ce qui
-# permet de suivre une image publiée sous un nom fixe (Killbit, « latest »).
+# permet de suivre une image publiée sous un nom fixe. Killbit suit
+# releases/latest/download/ : la dernière version publiée (v0.1.0…), que
+# GitHub désigne par redirection, et non la pré-release « latest » reconstruite
+# à chaque commit.
 
 no|ubuntu|casper-iso|ubuntu-26.04.1-desktop-amd64.iso|https://releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.iso|sha256sums:https://releases.ubuntu.com/26.04/SHA256SUMS|Ubuntu 26.04.1 LTS
 no|ubuntu-server|casper-iso|ubuntu-26.04.1-live-server-amd64.iso|https://releases.ubuntu.com/26.04/ubuntu-26.04.1-live-server-amd64.iso|sha256sums:https://releases.ubuntu.com/26.04/SHA256SUMS|Ubuntu Server 26.04.1 LTS - installation
 no|lubuntu|casper-iso|lubuntu-26.04.1-desktop-amd64.iso|https://cdimage.ubuntu.com/lubuntu/releases/26.04/release/lubuntu-26.04.1-desktop-amd64.iso|sha256sums:https://cdimage.ubuntu.com/lubuntu/releases/26.04/release/SHA256SUMS|Lubuntu 26.04.1 LTS
 no|zorin|casper-iso|Zorin-OS-18.1-Core-64-bit.iso|https://mirrors.edge.kernel.org/zorinos-isos/18/Zorin-OS-18.1-Core-64-bit.iso|44649b97bd307fc4c8529205d098ebbf98575a1e1ba2ee7d7005b697af1721d5|Zorin OS 18.1 Core
-no|killbit|debian-live-iso|killbit-live.iso|https://github.com/Action-Numerique-Solidaire/killbit-image/releases/download/latest/killbit-live.iso|sha256sums:https://github.com/Action-Numerique-Solidaire/killbit-image/releases/download/latest/killbit-live.iso.sha256|Killbit - effacement sécurisé
+no|killbit|debian-live-iso|killbit-live.iso|https://github.com/Action-Numerique-Solidaire/killbit-image/releases/latest/download/killbit-live.iso|sha256sums:https://github.com/Action-Numerique-Solidaire/killbit-image/releases/latest/download/killbit-live.iso.sha256|Killbit - effacement sécurisé
 no|clonezilla|clonezilla-zip|clonezilla-live-3.3.3-37-amd64.zip|https://downloads.sourceforge.net/project/clonezilla/clonezilla_live_stable/3.3.3-37/clonezilla-live-3.3.3-37-amd64.zip|bbb02b409708cf37774debe00f96c642c59c48ebb216f7349dc2252f705ff10e|Clonezilla Live 3.3.3-37
 no|windows11|windows-iso|Win11.iso|REPLACE_URL|REPLACE_SHA256|Windows 11 - installation
