@@ -23,7 +23,9 @@
 #      refuse « bitsctl apply » ; nginx sert les images téléchargées ;
 #  10. un POST sans l'en-tête X-BITS-Requete est refusé ;
 #  11. une nouvelle version d'une image à nom fixe est détectée, puis
-#      reconnue à jour une fois téléchargée.
+#      reconnue à jour une fois téléchargée ;
+#  12. mode passerelle (sans bits-web aussi) : validation, adresse du réseau
+#      PXE, table nftables, garde DHCP face à un autre serveur, retrait.
 #
 # Demande docker et l'image debian:trixie.
 set -Eeuo pipefail
@@ -43,7 +45,9 @@ log() { printf '\n[paquet-deb %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 log "Paquets : $(basename "$DEB")${WEB:+, $(basename "$WEB")}"
 
 set +e
-docker run --rm "${montages[@]}" "$IMAGE" bash -c '
+# NET_ADMIN : le contrôle 12 crée des interfaces et une table nftables, dans
+# l'espace réseau du conteneur seulement.
+docker run --rm --cap-add NET_ADMIN --cap-add NET_RAW "${montages[@]}" "$IMAGE" bash -c '
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 fail() { echo "ÉCHEC $*"; exit 1; }
@@ -168,6 +172,39 @@ if [[ -f /tmp/bits-web.deb ]]; then
   echo "OK 11 : nouvelle version détectée, téléchargée, puis reconnue à jour"
   nginx -s stop
 fi
+
+# 12. mode passerelle, sur une paire veth : lan0 tient lieu de port Ethernet
+# du réseau PXE, lan1 de ce qui y est branché.
+apt-get install -y -qq dnsmasq-base >/dev/null 2>&1 || true
+ip link add lan0 type veth peer name lan1 || fail "12 : création des interfaces de test"
+ip link set lan1 up
+mkdir -p /etc/bits-pxe-server/pxe.env.d
+printf "PXE_MODE=passerelle\nPXE_LAN_INTERFACE=lan0\n" > /etc/bits-pxe-server/pxe.env.d/50-essai.env
+out=$(/usr/share/bits-pxe-server/scripts/00-validate-config.sh) || { echo "$out"; fail "12 : validation en mode passerelle"; }
+grep -F "réseau PXE 192.168.42.1/24 sur lan0" <<<"$out" >/dev/null || { echo "$out"; fail "12 : réseau PXE"; }
+P=/usr/share/bits-pxe-server/scripts/bits-passerelle.sh
+$P > /tmp/pg.log 2>&1 || { cat /tmp/pg.log; fail "12 : bits-passerelle.sh"; }
+ip -4 -o addr show dev lan0 | grep -F " 192.168.42.1/24 " >/dev/null || fail "12 : adresse du réseau PXE absente"
+nft list table inet bits | grep -F "masquerade" >/dev/null || fail "12 : NAT absent"
+[[ -s /run/issue.d/bits-passerelle.issue ]] || fail "12 : console sans l adresse du réseau PXE"
+[[ ! -e /run/bits/dhcp-refuse ]] || fail "12 : refus DHCP sans autre serveur"
+grep -F "DHCP 192.168.42.100-192.168.42.250" /tmp/pg.log >/dev/null || { cat /tmp/pg.log; fail "12 : plage DHCP"; }
+echo "OK 12 : passerelle appliquée (adresse, NAT, aucun autre DHCP)"
+# Un autre serveur DHCP derrière lan0 : câble branché sur la box au lieu du switch.
+ip addr add 10.99.0.1/24 dev lan1
+dnsmasq --port=0 --interface=lan1 --bind-interfaces --dhcp-range=10.99.0.10,10.99.0.20 --pid-file=/run/autre-dhcp.pid --dhcp-leasefile=/run/autre.leases
+set +e; $P > /tmp/pg2.log 2>&1; rc=$?; set -e
+kill "$(cat /run/autre-dhcp.pid)"
+[[ $rc -eq 4 ]] || { cat /tmp/pg2.log; fail "12 : autre serveur DHCP non détecté (code $rc)"; }
+grep -Fx 10.99.0.1 /run/bits/dhcp-refuse >/dev/null || fail "12 : refus non noté"
+echo "OK 12 : autre serveur DHCP détecté, DHCP de BITS refusé"
+rm -f /etc/bits-pxe-server/pxe.env.d/50-essai.env
+$P > /tmp/pg3.log 2>&1 || { cat /tmp/pg3.log; fail "12 : retour au mode proxy"; }
+! nft list table inet bits >/dev/null 2>&1 || fail "12 : table nftables restée en mode proxy"
+! ip -4 -o addr show dev lan0 | grep -F 192.168.42.1 >/dev/null || fail "12 : adresse restée en mode proxy"
+[[ ! -e /run/bits/dhcp-refuse && ! -e /run/issue.d/bits-passerelle.issue ]] || fail "12 : état resté en mode proxy"
+echo "OK 12 : retour au mode proxy, passerelle retirée"
+ip link del lan0
 
 # 6. purge
 mkdir -p /srv/bits-data/downloads && touch /srv/bits-data/downloads/image.iso

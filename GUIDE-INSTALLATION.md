@@ -5,9 +5,22 @@ accessible en SSH, qui se met à jour seul et sert en démarrage réseau les
 images choisies dans une interface web (Ubuntu, Zorin OS, Killbit,
 Clonezilla…).
 
-Il faut : une clé USB d'au moins 128 Mo, le PC qui deviendra le serveur, et un
-réseau filaire avec une box ou un routeur qui distribue les adresses (DHCP) et
-donne accès à internet.
+Il faut : une clé USB d'au moins 256 Mo et le PC qui deviendra le serveur.
+
+Deux montages sont possibles, choisis par la façon dont on installe :
+
+**Passerelle (installation en Wi-Fi)** : le serveur a internet par le Wi-Fi
+et sert un réseau PXE à lui, sur sa carte Ethernet reliée à un switch. Il y
+distribue les adresses (192.168.42.0/24) et donne internet aux postes. Il faut
+une carte ou une clé USB Wi-Fi sur le serveur.
+
+```
+box ─câble─ routeur Wi-Fi ))) Wi-Fi ((( serveur BITS ─câble─ switch ─ postes PXE
+                                                     192.168.42.1
+```
+
+**Proxy (installation par câble)** : le serveur rejoint le réseau existant,
+dont la box distribue les adresses ; il n'ajoute que le démarrage PXE.
 
 > **Phase alpha.** Les clés produites aujourd'hui installent les paquets du
 > canal d'essai (`apt-test`). Le canal stable n'existera qu'avec la première
@@ -20,7 +33,7 @@ donne accès à internet.
 ### 1.1 Récupérer l'image
 
 Sur la page des releases du projet, prendre la plus récente qui contient
-`bits-amorcage.iso` (~65 Mo), avec son fichier `SHA256SUMS` :
+`bits-amorcage.iso` (~150 Mo), avec son fichier `SHA256SUMS` :
 
 <https://github.com/Action-Numerique-Solidaire/boot-in-the-shell/releases>
 
@@ -59,7 +72,9 @@ Remplacer `/dev/sdX` par la clé, **jamais** par le disque de l'ordinateur.
 **Le disque interne du PC est entièrement effacé**, sans autre question. La
 clé, elle, n'est jamais touchée.
 
-1. Brancher le PC au réseau **par câble**, puis brancher la clé.
+1. Passerelle : brancher la carte Ethernet du serveur sur le **switch du
+   réseau PXE** (jamais sur la box ni sur le routeur Wi-Fi). Proxy : la
+   brancher sur le réseau de la box. Puis brancher la clé.
 2. Démarrer sur la clé : menu de démarrage du firmware (souvent F12, F11, F8
    ou Échap au démarrage), entrée USB.
    Le PC peut démarrer en UEFI ou en BIOS (« legacy »). En cas de refus avec
@@ -69,10 +84,16 @@ clé, elle, n'est jamais touchée.
    - **Installer le serveur BITS (EFFACE le disque interne)** ← celle-ci ;
    - *Installation Debian manuelle* : installateur Debian normal, sans BITS ;
    - *Démarrer sur le disque local*.
-4. L'installation se déroule seule, en français, sans aucune question :
-   réseau, effacement du disque, système, puis les paquets BITS. Compter 5 à
-   6 minutes sur une bonne connexion (mesuré en machine virtuelle) ; plus sur
-   une connexion lente.
+4. Seules les questions du réseau sont posées, en français :
+   - **la carte réseau**, si le PC en a plusieurs : choisir la carte **sans
+     fil** (souvent `wlp…`, « Wireless ») pour le montage passerelle, la carte
+     Ethernet (`enp…`) pour le montage proxy ;
+   - en Wi-Fi, **le réseau** dans la liste des réseaux détectés, le type de
+     sécurité (WPA/WPA2 PSK) et **le mot de passe** du Wi-Fi.
+
+   Le reste se déroule seul : effacement du disque, système, paquets BITS.
+   Compter 5 à 6 minutes sur une bonne connexion (mesuré en machine
+   virtuelle) ; plus sur une connexion lente ou en Wi-Fi.
 5. À la fin, le PC redémarre. **Retirer la clé** à ce moment-là. Si elle est
    restée branchée, le menu de la clé réapparaît et attend : la retirer et
    redémarrer.
@@ -97,6 +118,14 @@ bits login:
 - Le serveur PXE répond déjà, avec un menu sans image.
 - Une **adresse fixe** est souhaitable : réserver l'adresse du serveur dans la
   box (réservation DHCP).
+- Passerelle : la console affiche aussi
+  `Réseau PXE : 192.168.42.1 sur enp1s0 …`. L'interface web répond depuis le
+  réseau du Wi-Fi (adresse ci-dessus) et depuis le switch,
+  `http://192.168.42.1/`. Si elle affiche en rouge « un autre serveur DHCP
+  répond sur le réseau PXE », la carte Ethernet est branchée sur la box ou sur
+  le routeur Wi-Fi au lieu du switch : la rebrancher, puis « Appliquer au
+  PXE ». Changer de réseau Wi-Fi plus tard : voir le
+  [PLAYBOOK](03%20-%20prototype-generic/PLAYBOOK.md#mode-passerelle--réseau-pxe-dédié).
 
 ---
 

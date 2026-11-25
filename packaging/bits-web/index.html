@@ -265,7 +265,13 @@ function rendre(etat) {
   const s = etat.serveur;
   $("serveur").innerHTML = "";
   const parts = [];
-  if (s.ip) parts.push(["PXE sur ", s.ip, " (" + (s.interface || "?") + ")"]);
+  const pg = s.passerelle;
+  if (pg) {
+    const a = pg.amont;
+    parts.push(["Internet par ", a.interface || "aucune route",
+                (a.wifi ? " (Wi-Fi" + (a.ssid ? " « " + a.ssid + " »" : "") + ")" : "") + (a.ip ? " " + a.ip : "")]);
+    parts.push(["Réseau PXE ", (s.adresse || s.ip || "?"), " sur " + (s.interface || "?") + ", " + pg.baux + " poste(s)"]);
+  } else if (s.ip) parts.push(["PXE sur ", s.ip, " (" + (s.interface || "?") + ")"]);
   if (s.libre != null) parts.push(["", octets(s.libre), " libres"]);
   parts.forEach(([a, code, b], i) => {
     if (i) $("serveur").append(" · ");
@@ -276,7 +282,11 @@ function rendre(etat) {
   const p = etat.publication, d = p.derniere;
   const aPublier = etat.medias.some((m) => m.etat === "à publier" || m.etat === "à retirer" || versionARepublier(m));
   let rond = "", statut, message = "";
-  if (p.en_cours) {
+  if (s.passerelle && s.passerelle.dhcp_refuse) {
+    rond = "erreur"; statut = "DHCP arrêté : un autre serveur DHCP répond sur le réseau PXE";
+    message = "Serveur(s) : " + s.passerelle.dhcp_refuse + ". Le port " + (s.interface || "") +
+              " doit être relié au switch du réseau PXE, pas à la box ni au routeur Wi-Fi.";
+  } else if (p.en_cours) {
     rond = "actif";
     const op = p.operation || {};
     const cible = etat.medias.find((m) => m.id === op.id);

@@ -46,7 +46,7 @@ install -d -m 0755 \
   "$STAGE/etc/$PKG" \
   "$STAGE/usr/share/doc/$PKG"
 
-install -m 0755 "$PROTO_SRC/scripts/"*.sh      "$STAGE/usr/share/$PKG/scripts/"
+install -m 0755 "$PROTO_SRC/scripts/"*.sh "$PROTO_SRC/scripts/"*.py "$STAGE/usr/share/$PKG/scripts/"
 install -m 0644 "$PROTO_SRC/scripts/lib/"*.sh  "$STAGE/usr/share/$PKG/scripts/lib/"
 # Script embarqué dans iPXE, pour la compilation facultative (étape 50).
 install -m 0644 "$PROTO_SRC/config/boot.ipxe"  "$STAGE/usr/share/$PKG/config/"
@@ -54,6 +54,7 @@ install -m 0644 "$PROTO_SRC/config/boot.ipxe"  "$STAGE/usr/share/$PKG/config/"
 install -m 0755 "$PKG_SRC/bitsctl"               "$STAGE/usr/sbin/bitsctl"
 install -m 0644 "$PKG_SRC/bits-dnsmasq.service"  "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PKG_SRC/bits-sync.service"     "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PKG_SRC/bits-lan.service"      "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PKG_SRC/bits-telechargement@.service" "$STAGE/usr/lib/systemd/system/"
 
 # La configuration part dans /etc en conffiles : dpkg préservera les
@@ -108,8 +109,9 @@ Priority: optional
 Architecture: all
 Maintainer: Action Numérique Solidaire <contact@actionnumeriquesolidaire.org>
 Depends: bash (>= 5.0), systemd, python3, curl, ca-certificates, iproute2,
- util-linux, mount, dnsmasq-base, nginx, nfs-kernel-server, ipxe, unzip
-Suggests: samba, wimtools, rsync, parted, e2fsprogs
+ util-linux, mount, dnsmasq-base, nginx, nfs-kernel-server, ipxe, unzip,
+ nftables
+Suggests: samba, wimtools, rsync, parted, e2fsprogs, wpasupplicant, iw
 Homepage: https://github.com/Action-Numerique-Solidaire/boot-in-the-shell
 Description: Serveur de démarrage PXE pour le reconditionnement de PC
  « Boot in the Shell » sert en PXE des images d'installation, de diagnostic
@@ -174,10 +176,12 @@ cat > "$STAGE/DEBIAN/prerm" <<'PRERM'
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ]; then
+  # Mode passerelle : adresse du réseau PXE, NAT et routage retirés.
+  /usr/share/bits-pxe-server/scripts/bits-passerelle.sh --retirer || true
   if [ -d /run/systemd/system ]; then
-    systemctl disable --now bits-sync.service bits-dnsmasq.service 2>/dev/null || true
+    systemctl disable --now bits-sync.service bits-dnsmasq.service bits-lan.service 2>/dev/null || true
   else
-    systemctl disable bits-sync.service bits-dnsmasq.service 2>/dev/null || true
+    systemctl disable bits-sync.service bits-dnsmasq.service bits-lan.service 2>/dev/null || true
   fi
 fi
 exit 0
@@ -188,6 +192,10 @@ cat > "$STAGE/DEBIAN/postrm" <<'POSTRM'
 set -e
 if [ "$1" = "purge" ]; then
   rm -rf /var/lib/bits /var/log/bits
+  # Compléments de configuration hors conffile (mode écrit par la clé
+  # d'installation) : dpkg ne les connaît pas.
+  rm -rf /etc/bits-pxe-server/pxe.env.d
+  rmdir /etc/bits-pxe-server 2>/dev/null || true
   echo "Les images téléchargées restent dans /srv/bits-data : à supprimer à la main si besoin."
 fi
 if [ -d /run/systemd/system ]; then

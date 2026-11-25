@@ -145,6 +145,8 @@ fi
 if [[ -z "$labo_ok" ]]; then
   run "4. paquets de bout en bout (clients PXE BIOS et UEFI)" \
     "$SCRIPT_DIR/e2e-paquet.sh" "${SERVEUR[0]}" "${WEB[0]}" ${KILLBIT:+"$KILLBIT"}
+  run "4. paquets de bout en bout, mode passerelle (DHCP, NAT, garde DHCP)" \
+    "$SCRIPT_DIR/e2e-paquet.sh" --passerelle "${SERVEUR[0]}" "${WEB[0]}" ${KILLBIT:+"$KILLBIT"}
 else
   ignore "4. paquets de bout en bout" "$labo_ok"
 fi

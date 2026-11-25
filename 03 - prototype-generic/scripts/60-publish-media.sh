@@ -217,17 +217,19 @@ elif [[ -e "$samba_file" ]]; then
   : > "$samba_file"
 fi
 
-# --- 6. dnsmasq : ProxyDHCP et TFTP, sans DNS ---------------------------------------
+# --- 6. dnsmasq --------------------------------------------------------------------
 # Écrit dans /var/lib/bits et lu par bits-dnsmasq.service, pas par le service
-# dnsmasq du système : installer BITS ne démarre aucun serveur DNS.
-network_address="${PXE_SUBNET_CIDR%/*}"
-cat > "$dnsmasq_file" <<EOF
-# Écrit par bits-pxe-server (60-publish-media.sh) : toute modification à la
-# main est perdue à la prochaine publication.
-port=0
-interface=$PXE_INTERFACE
-bind-interfaces
-dhcp-range=$network_address,proxy
+# dnsmasq du système.
+#
+# Mode proxy : ProxyDHCP et TFTP, sans DNS. Le DHCP du réseau reste celui de
+# la box ; BITS n'ajoute que les informations de démarrage.
+#
+# Mode passerelle : DHCP complet, DNS et TFTP sur l'interface du réseau PXE
+# seule. Le DNS relaie vers les serveurs de l'amont (resolv.conf) et n'écoute
+# que sur ce réseau : rien ne change côté Wi-Fi. Pas de pxe-service : en DHCP
+# complet, dhcp-boot suffit, y compris pour un client déjà iPXE.
+boot_commun() {
+  cat <<EOF
 enable-tftp
 tftp-root=$PXE_TFTP_ROOT
 dhcp-userclass=set:ipxe,iPXE
@@ -237,6 +239,41 @@ dhcp-match=set:efi64,option:client-arch,9
 dhcp-boot=tag:ipxe,http://$PXE_IP/pxe/menu.ipxe
 dhcp-boot=tag:!ipxe,tag:efi64,snponly.efi,,$PXE_IP
 dhcp-boot=tag:!ipxe,tag:!efi64,undionly.kpxe,,$PXE_IP
+EOF
+}
+
+if [[ "$PXE_MODE" == passerelle ]]; then
+  {
+    cat <<EOF
+# Écrit par bits-pxe-server (60-publish-media.sh, mode passerelle) : toute
+# modification à la main est perdue à la prochaine publication.
+interface=$PXE_INTERFACE
+bind-interfaces
+domain-needed
+bogus-priv
+no-hosts
+dhcp-authoritative
+dhcp-range=$PXE_DHCP_DEBUT,$PXE_DHCP_FIN,$PXE_NETMASK,12h
+dhcp-option=option:router,$PXE_IP
+dhcp-option=option:dns-server,$PXE_IP
+dhcp-leasefile=$PXE_STATE_DIR/dnsmasq.leases
+EOF
+    boot_commun
+    echo "log-dhcp"
+  } > "$dnsmasq_file"
+else
+network_address="${PXE_SUBNET_CIDR%/*}"
+{
+cat <<EOF
+# Écrit par bits-pxe-server (60-publish-media.sh, mode proxy) : toute
+# modification à la main est perdue à la prochaine publication.
+port=0
+interface=$PXE_INTERFACE
+bind-interfaces
+dhcp-range=$network_address,proxy
+EOF
+boot_commun
+cat <<EOF
 pxe-service=tag:!ipxe,BC_EFI,"iPXE UEFI",snponly.efi,$PXE_IP
 pxe-service=tag:!ipxe,X86-64_EFI,"iPXE UEFI x64",snponly.efi,$PXE_IP
 pxe-service=tag:!ipxe,x86PC,"iPXE BIOS",undionly.kpxe,$PXE_IP
@@ -250,6 +287,8 @@ pxe-service=tag:ipxe,X86-64_EFI,"Boot in the Shell",menu.ipxe,$PXE_IP
 pxe-service=tag:ipxe,BC_EFI,"Boot in the Shell",menu.ipxe,$PXE_IP
 log-dhcp
 EOF
+} > "$dnsmasq_file"
+fi
 
 # --- 7. menu iPXE ----------------------------------------------------------------
 # Aucune entrée par défaut et aucun délai : « choose » attend un choix. Un

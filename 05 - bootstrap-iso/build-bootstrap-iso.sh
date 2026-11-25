@@ -107,6 +107,7 @@ install -m 0644 "$SCRIPT_DIR/preseed/racine.cfg"        "$TRAVAIL/racine/preseed
 install -m 0644 "$SCRIPT_DIR/preseed/preseed.cfg"       "$TRAVAIL/racine/bits/"
 install -m 0755 "$SCRIPT_DIR/preseed/choisir-disque.sh" "$TRAVAIL/racine/bits/"
 install -m 0755 "$SCRIPT_DIR/preseed/late.sh"           "$TRAVAIL/racine/bits/"
+install -m 0755 "$SCRIPT_DIR/preseed/mode-reseau.sh"    "$TRAVAIL/racine/bits/"
 printf "BITS_DEPOT='deb [trusted=yes] %s ./'\n" "$DEPOT" > "$TRAVAIL/racine/bits/bits.conf"
 
 # --- firmwares des cartes réseau -----------------------------------------------------
@@ -118,9 +119,13 @@ printf "BITS_DEPOT='deb [trusted=yes] %s ./'\n" "$DEPOT" > "$TRAVAIL/racine/bits
 # carte demande, et l'installe aussi dans le système, sinon la carte
 # retomberait en panne au premier démarrage.
 #
-# Seulement les cartes filaires (~14 Mo), pas les 474 Mo du jeu complet.
+# Cartes filaires et Wi-Fi courantes, pas les 474 Mo du jeu complet.
 FIRMWARES=(firmware-realtek firmware-bnx2 firmware-bnx2x firmware-intel-misc
-           firmware-misc-nonfree firmware-qlogic firmware-netronome)
+           firmware-misc-nonfree firmware-qlogic firmware-netronome
+           # Wi-Fi : amont du mode passerelle. Intel, Atheros/Qualcomm,
+           # MediaTek, Broadcom, Marvell ; Realtek est dans firmware-realtek.
+           firmware-iwlwifi firmware-atheros firmware-mediatek firmware-brcm80211
+           firmware-libertas)
 log "Firmwares réseau : ${FIRMWARES[*]}"
 install -d -m 0755 "$CACHE/firmware" "$TRAVAIL/racine/firmware"
 index=""
@@ -173,7 +178,10 @@ chmod u+w "$TRAVAIL/initrd.gz"
 # Aucun choix par défaut ni délai : l'installation EFFACE le disque interne.
 # Une clé restée branchée sur une machine qui redémarre attend qu'on choisisse,
 # au lieu de réinstaller. Seule l'entrée BITS passe bits=installer.
-params_bits="bits=installer priority=critical locale=fr_FR.UTF-8 keymap=fr"
+# priority=high et non critical : l'installateur demande l'interface réseau
+# (s'il y en a plusieurs) et, en Wi-Fi, le réseau et son mot de passe. Tout le
+# reste est préréglé (preseed.cfg) et n'est pas demandé.
+params_bits="bits=installer priority=high locale=fr_FR.UTF-8 keymap=fr"
 params_fin="quiet"
 delai_grub="set timeout=-1"
 delai_syslinux="timeout 0"
@@ -187,6 +195,9 @@ if (( TEST )); then
 set default=0"
   delai_syslinux="timeout 10"
   defaut_syslinux="  menu default"
+  # Seule question que la variante de test ne peut pas laisser poser : le
+  # choix de l'interface, quand la VM a deux cartes.
+  params_bits="$params_bits netcfg/choose_interface=auto"
 fi
 (( SERIE )) && params_fin="quiet console=tty0 console=ttyS0,115200n8"
 

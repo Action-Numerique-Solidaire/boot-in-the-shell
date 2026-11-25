@@ -7,9 +7,11 @@ de la préparation de la clé USB au premier poste démarré sur le réseau.
 ## Deux façons d'avoir un serveur PXE
 
 **Un PC dédié, depuis une clé USB.** Graver `bits-amorcage.iso` (fichier de
-release, ~65 Mo), démarrer le PC dessus et choisir *Installer le serveur BITS* :
+release, ~150 Mo), démarrer le PC dessus et choisir *Installer le serveur BITS* :
 Debian 13 s'installe sur le disque interne (**entièrement effacé**), puis BITS.
-Au redémarrage, la console affiche l'adresse de l'interface web.
+Au redémarrage, la console affiche l'adresse de l'interface web. Installé en
+Wi-Fi, le serveur devient la passerelle d'un réseau PXE dédié sur sa carte
+Ethernet (192.168.42.0/24 : DHCP, DNS, accès à internet pour les postes).
 Voir [05 - bootstrap-iso](05%20-%20bootstrap-iso/README.md).
 
 **Une machine Debian ou Ubuntu existante, par apt.**

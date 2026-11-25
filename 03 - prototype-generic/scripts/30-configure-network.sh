@@ -4,6 +4,14 @@ source "$(dirname "$0")/lib/common.sh"
 require_root
 load_config
 
+# Mode passerelle : le serveur est le routeur du réseau PXE (adresse, NAT,
+# garde DHCP). En mode proxy, le même script retire ce qu'une passerelle
+# aurait laissé.
+"$(dirname "$0")/bits-passerelle.sh"
+if [[ "$PXE_MODE" == passerelle ]]; then
+  exit 0
+fi
+
 # Par défaut, le réseau appartient au système (DHCP de l'installation,
 # NetworkManager, ifupdown…) et BITS se contente de le lire. Écrire Netplan
 # n'arrive que sur demande explicite.

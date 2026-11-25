@@ -13,7 +13,18 @@
 # DHCP de libvirt tient le rôle du routeur du site ; le serveur sous test ne
 # fait que du ProxyDHCP, comme en production.
 #
-# Usage : sudo tests/e2e-paquet.sh <bits-pxe-server.deb> [bits-web.deb] [killbit.iso]
+# --passerelle : le serveur est la passerelle d'un réseau PXE dédié
+# (PXE_MODE=passerelle). Il a une seconde carte sur un pont isolé, sans DHCP
+# ni accès de l'hôte ; le réseau NAT tient lieu du Wi-Fi de l'amont (la
+# logique du serveur est la même). Les clients PXE sont sur le pont isolé et
+# reçoivent leur adresse du serveur. En plus :
+#   - un poste Debian du réseau PXE obtient 192.168.42.x et atteint internet
+#     (DNS et HTTPS) par la passerelle ;
+#   - depuis l'amont, ce poste n'est pas joignable, même avec une route ;
+#   - un autre serveur DHCP sur le réseau PXE : la publication refuse et le
+#     DHCP de BITS reste arrêté.
+#
+# Usage : sudo tests/e2e-paquet.sh [--passerelle] <bits-pxe-server.deb> [bits-web.deb] [killbit.iso]
 #         sudo tests/e2e-paquet.sh --nettoyer
 #
 #   Les arguments sont reconnus à leur extension.
@@ -25,10 +36,11 @@
 set -Eeuo pipefail
 
 [[ $# -ge 1 ]] || { echo "Usage: sudo e2e-paquet.sh <bits-pxe-server.deb> [bits-web.deb] [killbit.iso] | --nettoyer" >&2; exit 2; }
-DEBS=() MEDIA="" WEB=0
+DEBS=() MEDIA="" WEB=0 PASSERELLE=0
 if [[ "$1" != --nettoyer ]]; then
   for a in "$@"; do
     case "$a" in
+      --passerelle) PASSERELLE=1 ;;
       *.deb) [[ -f "$a" ]] || { echo "ERREUR : paquet introuvable : $a" >&2; exit 1; }
              DEBS+=("$(readlink -f "$a")"); [[ "$(basename "$a")" == bits-web_* ]] && WEB=1 ;;
       *.iso) MEDIA="$a" ;;
@@ -48,6 +60,11 @@ CACHE="$WORK/cache"
 SERVER="$PREFIX-server"
 CLIENT_BIOS="$PREFIX-client-bios"
 CLIENT_UEFI="$PREFIX-client-uefi"
+POSTE="$PREFIX-poste"
+NET_LAN="$PREFIX-lan"
+BRIDGE_LAN=virbr-bitslan
+LAN=192.168.42           # réseau PXE du mode passerelle (défaut de BITS)
+AUTRE_DHCP=10.99.0
 VIRSH=(virsh -c qemu:///system)
 
 CLOUD_BASE=https://cloud.debian.org/images/cloud/trixie/latest
@@ -62,13 +79,18 @@ log() { printf '\n[e2e-paquet %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 
 teardown() {
   local d
-  for d in "$CLIENT_UEFI" "$CLIENT_BIOS" "$SERVER"; do
+  [[ -f /run/bits-e2e-autre-dhcp.pid ]] && kill "$(cat /run/bits-e2e-autre-dhcp.pid)" 2>/dev/null
+  rm -f /run/bits-e2e-autre-dhcp.pid
+  ip route del "$LAN.0/24" dev "$BRIDGE" 2>/dev/null || true
+  for d in "$POSTE" "$CLIENT_UEFI" "$CLIENT_BIOS" "$SERVER"; do
     "${VIRSH[@]}" destroy "$d" >/dev/null 2>&1 || true
     "${VIRSH[@]}" undefine "$d" --nvram >/dev/null 2>&1 \
       || "${VIRSH[@]}" undefine "$d" >/dev/null 2>&1 || true
   done
   "${VIRSH[@]}" net-destroy "$NET" >/dev/null 2>&1 || true
   "${VIRSH[@]}" net-undefine "$NET" >/dev/null 2>&1 || true
+  "${VIRSH[@]}" net-destroy "$NET_LAN" >/dev/null 2>&1 || true
+  "${VIRSH[@]}" net-undefine "$NET_LAN" >/dev/null 2>&1 || true
 }
 
 # --- Préalables ---------------------------------------------------------------
@@ -132,7 +154,7 @@ log "Purge d'un labo précédent éventuel"
 teardown
 trap final EXIT
 install -d -m 0755 "$WORK" "$CACHE"
-find "$WORK" -maxdepth 1 -type f \( -name '*.log' -o -name '*.fd' -o -name '*.xml' -o -name '*.err' -o -name 'seed.iso' -o -name 'server.qcow2' \) -delete
+find "$WORK" -maxdepth 1 -type f \( -name '*.log' -o -name '*.fd' -o -name '*.xml' -o -name '*.err' -o -name '*seed.iso' -o -name '*.qcow2' \) -delete
 
 # --- 1. Image Debian 13 -------------------------------------------------------
 # Mise en cache et vérifiée contre le SHA512SUMS publié avec elle.
@@ -165,6 +187,21 @@ cat > "$WORK/net.xml" <<EOF
 EOF
 "${VIRSH[@]}" net-define "$WORK/net.xml" >/dev/null
 "${VIRSH[@]}" net-start "$NET" >/dev/null
+# Réseau PXE du mode passerelle : un pont sans adresse ni DHCP, comme le
+# switch branché sur le seul serveur.
+NET_CLIENTS="$NET"
+if (( PASSERELLE )); then
+  log "Réseau $NET_LAN : pont isolé, sans DHCP (réseau PXE du serveur)"
+  cat > "$WORK/net-lan.xml" <<EOF
+<network>
+  <name>$NET_LAN</name>
+  <bridge name='$BRIDGE_LAN' stp='on' delay='0'/>
+</network>
+EOF
+  "${VIRSH[@]}" net-define "$WORK/net-lan.xml" >/dev/null
+  "${VIRSH[@]}" net-start "$NET_LAN" >/dev/null
+  NET_CLIENTS="$NET_LAN"
+fi
 
 # --- 3. Serveur : cloud-init installe les paquets ------------------------------------
 # Les paquets voyagent dans user-data (quelques dizaines de Ko) : pas de serveur
@@ -194,6 +231,16 @@ if [[ -n "$MEDIA" ]]; then
   media_step="install -d /srv/bits-data/downloads && dd if=/dev/disk/by-id/virtio-bitsmedia of=/srv/bits-data/downloads/killbit-live.iso bs=4M status=none && echo 'Image Killbit locale copiée.'"
 fi
 
+fichier_mode=""
+if (( PASSERELLE )); then
+  # Interface du réseau PXE non précisée : BITS doit trouver seul la carte
+  # Ethernet qui n'est pas l'amont.
+  fichier_mode="  - path: /etc/bits-pxe-server/pxe.env.d/10-e2e.env
+    content: |
+      PXE_MODE=passerelle
+"
+fi
+
 cat > "$WORK/meta-data" <<EOF
 instance-id: bits-e2e-$(date +%s)
 local-hostname: bits
@@ -207,7 +254,7 @@ chpasswd:
   users:
     - {name: root, password: admin, type: text}
 write_files:
-  - path: /etc/ssh/sshd_config.d/bits-e2e.conf
+$fichier_mode  - path: /etc/ssh/sshd_config.d/bits-e2e.conf
     content: |
       PermitRootLogin yes
       PasswordAuthentication yes
@@ -221,7 +268,9 @@ $fichiers_deb  - path: /root/e2e.sh
       # serial-getty révoque (vhangup) les descripteurs déjà ouverts dessus.
       exec > /var/log/bits-e2e.log 2>&1
       marque() { echo "\$*" > /dev/kmsg; echo "\$*"; }
-      ip=\$(ip -4 -o addr show scope global | awk '{print \$4; exit}')
+      # Adresse de l'amont (route par défaut) : en mode passerelle, le serveur
+      # porte aussi celle du réseau PXE.
+      ip=\$(ip -4 route get 1.1.1.1 | awk '{for (i = 1; i < NF; i++) if (\$i == "src") {print \$(i + 1); exit}}')
       fail() { marque "$FAILED \${ip%/*} \$*"; exit 1; }
       systemctl restart ssh
       export DEBIAN_FRONTEND=noninteractive
@@ -246,6 +295,13 @@ runcmd:
 EOF
 xorriso -as mkisofs -quiet -o "$WORK/seed.iso" -V cidata -J -R "$WORK/user-data" "$WORK/meta-data" 2>/dev/null
 
+carte_lan=""
+if (( PASSERELLE )); then
+  carte_lan="    <interface type='network'>
+      <source network='$NET_LAN'/>
+      <model type='virtio'/>
+    </interface>"
+fi
 server_log="$WORK/server.log"
 : > "$server_log"; chmod 0666 "$server_log"
 cat > "$WORK/server.xml" <<EOF
@@ -275,6 +331,7 @@ $media_disk
       <source network='$NET'/>
       <model type='virtio'/>
     </interface>
+$carte_lan
     <serial type='file'>
       <source path='$server_log'/>
       <target port='0'/>
@@ -393,10 +450,23 @@ grep -q '^item killbit ' "$WORK/menu.ipxe" || die "Killbit absent du menu"
 # shellcheck disable=SC2016  # ${target} est une variable iPXE, littérale ici
 grep -q '^choose target && goto ${target}$' "$WORK/menu.ipxe" || die "Le menu a un choix par défaut ou un délai"
 echo "  HTTP  menu.ipxe : $(wc -l < "$WORK/menu.ipxe") lignes, Killbit présent, aucun choix par défaut"
-for loader in undionly.kpxe snponly.efi menu.ipxe; do
-  curl -fsS --max-time 60 "tftp://$server_ip/$loader" -o "$WORK/tftp-$loader" || die "$loader inaccessible en TFTP"
-  echo "  TFTP  $loader : $(du -h "$WORK/tftp-$loader" | cut -f1)"
-done
+if (( PASSERELLE )); then
+  # dnsmasq n'écoute que sur le réseau PXE, que l'hôte n'atteint pas : TFTP
+  # éprouvé depuis le serveur, sur son adresse du réseau PXE.
+  for loader in undionly.kpxe snponly.efi menu.ipxe; do
+    taille="$("${SSH[@]}" "curl -fsS --max-time 60 tftp://$LAN.1/$loader | wc -c")" || die "$loader inaccessible en TFTP sur $LAN.1"
+    (( taille > 0 )) || die "$loader vide en TFTP sur $LAN.1"
+    echo "  TFTP  $LAN.1/$loader : $taille octets"
+  done
+  "${SSH[@]}" "curl -fsS --max-time 5 tftp://$server_ip/menu.ipxe -o /dev/null" 2>/dev/null \
+    && die "TFTP répond aussi sur l'amont ($server_ip) : dnsmasq doit se limiter au réseau PXE"
+  echo "  TFTP et DHCP limités au réseau PXE (rien sur $server_ip)"
+else
+  for loader in undionly.kpxe snponly.efi menu.ipxe; do
+    curl -fsS --max-time 60 "tftp://$server_ip/$loader" -o "$WORK/tftp-$loader" || die "$loader inaccessible en TFTP"
+    echo "  TFTP  $loader : $(du -h "$WORK/tftp-$loader" | cut -f1)"
+  done
+fi
 
 # --- 5. Clients : menu, choix de Killbit, démarrage réel ---------------------------
 # Le menu n'a pas de choix par défaut : le test appuie sur Entrée, ce qui
@@ -430,7 +500,7 @@ client_test() {
   <on_reboot>destroy</on_reboot>
   <devices>
     <interface type='network'>
-      <source network='$NET'/>
+      <source network='$NET_CLIENTS'/>
       <model type='e1000'/>
     </interface>
     <serial type='file'>
@@ -454,10 +524,15 @@ EOF
   sleep 2
   "${VIRSH[@]}" send-key "$name" KEY_ENTER >/dev/null
 
-  # Adresse du client : bail du DHCP du labo (le routeur du site).
+  # Adresse du client : bail du DHCP du labo (le routeur du site), ou du
+  # serveur lui-même en mode passerelle.
   local _
   for _ in $(seq 30); do
-    cip="$("${VIRSH[@]}" net-dhcp-leases "$NET" --mac "$mac" 2>/dev/null | awk '/ipv4/ {split($5, a, "/"); print a[1]; exit}')"
+    if (( PASSERELLE )); then
+      cip="$("${SSH[@]}" "awk -v m=$mac 'tolower(\$2) == tolower(m) {print \$3; exit}' /var/lib/bits/dnsmasq.leases" 2>/dev/null || true)"
+    else
+      cip="$("${VIRSH[@]}" net-dhcp-leases "$NET" --mac "$mac" 2>/dev/null | awk '/ipv4/ {split($5, a, "/"); print a[1]; exit}')"
+    fi
     [[ -n "$cip" ]] && break
     sleep 2
   done
@@ -484,6 +559,89 @@ EOF
 rc=0
 client_test "$CLIENT_BIOS" bios || rc=1
 client_test "$CLIENT_UEFI" uefi || rc=1
+
+# --- 5 bis. Mode passerelle : internet pour les postes, isolement, garde DHCP ------
+if (( PASSERELLE )); then
+  log "Poste Debian sur le réseau PXE : adresse, DNS et internet par la passerelle"
+  qemu-img create -q -f qcow2 -b "$CACHE/$CLOUD_IMG" -F qcow2 "$WORK/poste.qcow2" 4G
+  cat > "$WORK/poste-meta-data" <<EOF
+instance-id: bits-e2e-poste-$(date +%s)
+local-hostname: poste
+EOF
+  cat > "$WORK/poste-user-data" <<EOF
+#cloud-config
+runcmd:
+  - |
+    ip=\$(ip -4 -o addr show scope global | awk '{print \$4; exit}')
+    gw=\$(ip -4 route show default | awk '{print \$3; exit}')
+    dns=\$(getent hosts deb.debian.org >/dev/null && echo ok || echo echec)
+    web=\$(curl -fsS -o /dev/null --max-time 30 -w '%{http_code}' https://deb.debian.org/debian/ || echo echec)
+    echo "BITS-E2E-POSTE ip=\$ip gw=\$gw dns=\$dns web=\$web" > /dev/kmsg
+EOF
+  xorriso -as mkisofs -quiet -o "$WORK/poste-seed.iso" -V cidata -J -R \
+    -graft-points user-data="$WORK/poste-user-data" meta-data="$WORK/poste-meta-data" 2>/dev/null
+  poste_log="$WORK/poste.log"
+  : > "$poste_log"; chmod 0666 "$poste_log"
+  sed -e "s|<name>$SERVER</name>|<name>$POSTE</name>|" \
+      -e "s|$WORK/server.qcow2|$WORK/poste.qcow2|" -e "s|$WORK/seed.iso|$WORK/poste-seed.iso|" \
+      -e "s|$server_log|$poste_log|" -e "s|<memory unit='MiB'>2048</memory>|<memory unit='MiB'>1024</memory>|" \
+      "$WORK/server.xml" > "$WORK/poste.xml"
+  # Une seule carte, sur le réseau PXE (la première carte du serveur, sur
+  # l'amont, est retirée ; sa seconde passe sur le réseau PXE).
+  python3 - "$WORK/poste.xml" "$NET" <<'PY'
+import re, sys
+x = open(sys.argv[1]).read()
+x = re.sub(r"\s*<interface type='network'>\s*<source network='%s'/>.*?</interface>" % re.escape(sys.argv[2]), "", x, count=1, flags=re.S)
+x = re.sub(r"\s*<disk type='file' device='disk'>\s*<driver name='qemu' type='raw'/>.*?</disk>", "", x, flags=re.S)
+open(sys.argv[1], "w").write(x)
+PY
+  demarrer_domaine "$POSTE" "$WORK/poste.xml"
+  t0=$SECONDS
+  until grep -qa "BITS-E2E-POSTE" "$poste_log"; do
+    (( SECONDS - t0 < 300 )) || { tail -30 "$poste_log"; die "Le poste du réseau PXE n'a pas rendu compte"; }
+    sleep 3
+  done
+  ligne="$(grep -hao "BITS-E2E-POSTE.*" "$poste_log" | head -1)"
+  echo "  $ligne"
+  poste_ip="$(sed -n 's/.*ip=\([0-9.]*\).*/\1/p' <<<"$ligne")"
+  [[ "$poste_ip" == "$LAN".* ]] || die "Le poste n'a pas d'adresse du réseau PXE"
+  grep -qF "gw=$LAN.1 " <<<"$ligne" || die "Le poste n'a pas la passerelle $LAN.1"
+  grep -qF "dns=ok" <<<"$ligne" || die "Le poste ne résout pas de nom par $LAN.1"
+  grep -qF "web=200" <<<"$ligne" || die "Le poste n'atteint pas internet par la passerelle"
+  echo "  poste $poste_ip : passerelle $LAN.1, DNS et HTTPS vers internet"
+
+  # Isolement : même avec une route vers le réseau PXE par le serveur, l'amont
+  # (ici l'hôte) n'atteint pas les postes.
+  ip route add "$LAN.0/24" via "$server_ip" dev "$BRIDGE"
+  if ping -c 2 -W 2 "$poste_ip" >/dev/null 2>&1; then
+    die "Le poste $poste_ip est joignable depuis l'amont"
+  fi
+  ip route del "$LAN.0/24" dev "$BRIDGE"
+  echo "  poste injoignable depuis l'amont, même routé par le serveur"
+  "${VIRSH[@]}" destroy "$POSTE" >/dev/null 2>&1 || true
+
+  # Garde : un autre serveur DHCP sur le réseau PXE (câble branché sur la box
+  # au lieu du switch). La publication doit refuser, et le DHCP de BITS
+  # rester arrêté.
+  log "Garde DHCP : un autre serveur DHCP sur le réseau PXE"
+  ip addr add "$AUTRE_DHCP.1/24" dev "$BRIDGE_LAN"
+  dnsmasq --port=0 --interface="$BRIDGE_LAN" --bind-interfaces --dhcp-range="$AUTRE_DHCP.10,$AUTRE_DHCP.20" \
+    --pid-file=/run/bits-e2e-autre-dhcp.pid --dhcp-leasefile=/run/bits-e2e-autre.leases
+  set +e
+  # shellcheck disable=SC2016  # développé sur le serveur
+  sortie="$("${SSH[@]}" 'bitsctl apply 2>&1 | tail -5; echo "code=${PIPESTATUS[0]}"')"
+  set -e
+  kill "$(cat /run/bits-e2e-autre-dhcp.pid)"; rm -f /run/bits-e2e-autre-dhcp.pid
+  ip addr del "$AUTRE_DHCP.1/24" dev "$BRIDGE_LAN"
+  grep -qF "un autre serveur DHCP répond" <<<"$sortie" || { echo "$sortie"; die "Autre serveur DHCP non détecté"; }
+  grep -q "code=0" <<<"$sortie" && { echo "$sortie"; die "La publication a réussi malgré un autre serveur DHCP"; }
+  "${SSH[@]}" 'systemctl is-active --quiet bits-dnsmasq.service' && die "bits-dnsmasq actif malgré un autre serveur DHCP"
+  echo "  publication refusée, DHCP de BITS arrêté : « $(grep -F "autre serveur DHCP" <<<"$sortie" | head -1) »"
+  # Autre serveur retiré : la publication suivante rétablit le DHCP.
+  "${SSH[@]}" 'bitsctl apply >/dev/null 2>&1; systemctl is-active --quiet bits-dnsmasq.service' \
+    || die "DHCP non rétabli après retrait de l'autre serveur"
+  echo "  autre serveur retiré : DHCP de BITS rétabli à la publication suivante"
+fi
 
 # --- 6. Redémarrage du serveur : la publication doit revenir seule -----------------
 # bits-sync.service rejoue la publication à chaque démarrage. Sans lui, un
@@ -513,11 +671,23 @@ if (( WEB )); then
   banniere="$("${SSH[@]}" 'script -qc "agetty --show-issue" /dev/null' | tr -d '\r' || true)"
   grep -qF "http://$server_ip/" <<<"$banniere" || { echo "$banniere"; die "La console n'affiche pas http://$server_ip/"; }
   echo "  console : « $(grep -F "http://$server_ip/" <<<"$banniere" | head -1) »"
+  if (( PASSERELLE )); then
+    grep -qF "Réseau PXE : $LAN.1 " <<<"$banniere" || { echo "$banniere"; die "La console n'affiche pas le réseau PXE"; }
+    echo "  console : « $(grep -F "Réseau PXE" <<<"$banniere" | head -1) »"
+    # bits-lan au démarrage, sans attendre la publication.
+    "${SSH[@]}" "systemctl is-active --quiet bits-lan.service && ip -4 -o addr show | grep -qF ' $LAN.1/24 '" \
+      || die "Réseau PXE non rétabli au démarrage (bits-lan.service)"
+    echo "  bits-lan.service actif au démarrage, $LAN.1/24 posée"
+  fi
 fi
 
 echo
 if (( rc == 0 )); then
-  echo "[e2e-paquet] SUCCÈS : paquet installé par apt, Killbit publié, clients BIOS et UEFI démarrés dessus par le réseau."
+  if (( PASSERELLE )); then
+    echo "[e2e-paquet] SUCCÈS (passerelle) : clients BIOS et UEFI servis par le DHCP du serveur, poste du réseau PXE sur internet, isolé de l'amont, garde DHCP éprouvée."
+  else
+    echo "[e2e-paquet] SUCCÈS : paquet installé par apt, Killbit publié, clients BIOS et UEFI démarrés dessus par le réseau."
+  fi
 else
   echo "[e2e-paquet] ÉCHEC : voir les consoles ci-dessus et les journaux dans $WORK."
 fi

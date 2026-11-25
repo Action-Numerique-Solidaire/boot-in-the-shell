@@ -239,6 +239,59 @@ def reseau():
     return {"interface": interface, "adresse": None, "ip": None}
 
 
+def adresse_ipv4(interface):
+    try:
+        addrs = json.loads(subprocess.run(["ip", "-j", "-4", "addr", "show", "dev", interface, "scope", "global"],
+                                          capture_output=True, text=True, timeout=5).stdout or "[]")
+        for a in addrs:
+            for info in a.get("addr_info", []):
+                return info["local"]
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def passerelle():
+    """Mode passerelle : amont (internet) et réseau PXE servi. None en mode
+    proxy. Le mode se lit dans la configuration dnsmasq de la dernière
+    publication : c'est elle qui est servie."""
+    try:
+        with open(os.path.join(STATE_DIR, "dnsmasq.conf"), encoding="utf-8") as f:
+            conf = f.read().splitlines()
+    except OSError:
+        return None
+    if "dhcp-authoritative" not in conf:
+        return None
+    amont = None
+    try:
+        routes = json.loads(subprocess.run(["ip", "-j", "-4", "route", "show", "default"],
+                                           capture_output=True, text=True, timeout=5).stdout or "[]")
+        amont = routes[0]["dev"] if routes else None
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass
+    ssid = None
+    if amont and os.path.isdir(f"/sys/class/net/{amont}/wireless"):
+        try:
+            sortie = subprocess.run(["iw", "dev", amont, "link"], capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"^\s*SSID: (.*)$", sortie, re.M)
+            ssid = m.group(1) if m else None
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        with open(os.path.join(STATE_DIR, "dnsmasq.leases"), encoding="utf-8") as f:
+            baux = sum(1 for l in f if l.strip())
+    except OSError:
+        baux = 0
+    refus = lire_texte("/run/bits/dhcp-refuse")
+    return {
+        "amont": {"interface": amont, "ip": adresse_ipv4(amont) if amont else None,
+                  "wifi": bool(amont and os.path.isdir(f"/sys/class/net/{amont}/wireless")), "ssid": ssid},
+        "baux": baux,
+        # Un autre serveur DHCP répond sur le réseau PXE : le DHCP de BITS est arrêté.
+        "dhcp_refuse": refus,
+    }
+
+
 def operation_en_cours():
     """Nature de l'opération en cours, d'après le dernier journal ouvert :
     publication, ou téléchargement d'une image (et laquelle)."""
@@ -311,7 +364,7 @@ def etat():
     except OSError:
         libre = None
     return {
-        "serveur": {**reseau(), "donnees": DATA_DIR, "libre": libre},
+        "serveur": {**reseau(), "donnees": DATA_DIR, "libre": libre, "passerelle": passerelle()},
         "publication": {
             "en_cours": publication_en_cours(),
             "operation": operation_en_cours(),

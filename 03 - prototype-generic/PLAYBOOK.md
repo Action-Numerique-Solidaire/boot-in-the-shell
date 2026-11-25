@@ -11,8 +11,12 @@ testé ; Debian 12 fournit un iPXE de 2019.
 ## 1. Prérequis
 
 - un accès Internet pendant l'installation et pour télécharger les images ;
-- un **DHCP déjà présent** sur le réseau (la box ou le routeur du site). Le
-  serveur fonctionne en ProxyDHCP : il ne distribue jamais d'adresses ;
+- mode proxy (par défaut) : un **DHCP déjà présent** sur le réseau (la box ou
+  le routeur du site). Le serveur fonctionne en ProxyDHCP : il ne distribue
+  jamais d'adresses ;
+- mode passerelle (section 6) : deux cartes réseau, l'une avec accès à
+  internet (Wi-Fi par exemple), l'autre reliée au switch du réseau PXE, où le
+  serveur distribue lui-même les adresses ;
 - une adresse IPv4 sur l'interface réseau, statique ou obtenue par DHCP ;
 - de la place pour les images servies dans `/srv/bits-data` : 0,3 Go pour
   Killbit, 4 à 7 Go pour une image Ubuntu ou Zorin.
@@ -156,9 +160,50 @@ sudo bits-pxe-install --prepare-data-disk
 **Cette commande efface entièrement le disque** désigné. Elle refuse le disque
 qui porte `/`.
 
+### Mode passerelle : réseau PXE dédié
+
+```
+box ─ routeur Wi-Fi ))) Wi-Fi ((( serveur BITS ─ Ethernet ─ switch ─ postes PXE
+                                   amont       192.168.42.1/24
+```
+
+Le serveur est le routeur d'un réseau PXE à lui. Sur la carte Ethernet, il
+porte `192.168.42.1/24` et sert le DHCP (`.100` à `.250`), le DNS (relais vers
+ceux de l'amont) et le PXE ; les postes sortent sur internet par l'amont, en
+NAT. Depuis l'amont, les postes ne sont pas joignables. L'interface web et SSH
+répondent sur les deux réseaux.
+
+La clé d'installation choisit ce mode quand l'installation se fait en Wi-Fi.
+À la main, dans `/etc/bits-pxe-server/pxe.env` (ou un fichier
+`pxe.env.d/*.env`) :
+
+```bash
+PXE_MODE=passerelle
+#PXE_LAN_INTERFACE=enp1s0     # défaut : première carte Ethernet hors amont
+#PXE_LAN_CIDR=192.168.42.1/24
+```
+
+puis `sudo bitsctl apply`. `bits-lan.service` repose l'adresse, le routage et
+le NAT à chaque démarrage, sans attendre le Wi-Fi.
+
+**Garde DHCP.** Avant de servir le DHCP, le serveur vérifie qu'aucun autre
+serveur DHCP ne répond sur la carte du réseau PXE. Si le câble est branché
+sur la box ou sur le routeur Wi-Fi au lieu du switch, la publication refuse
+(« un autre serveur DHCP répond sur … »), le DHCP de BITS reste arrêté, et
+l'interface web l'affiche en rouge. Rebrancher sur le switch, puis
+« Appliquer au PXE ».
+
+Changer de réseau Wi-Fi : `wpa-ssid` et `wpa-psk` dans
+`/etc/network/interfaces`, puis `systemctl restart networking` (ou
+redémarrer).
+
+Le pare-feu de la passerelle tient dans la table nftables `inet bits`. Docker,
+s'il est installé, met la chaîne `FORWARD` d'iptables en `drop` : les postes
+n'auraient alors plus internet.
+
 ### Réseau géré par BITS (Ubuntu)
 
-Avec `PXE_MANAGE_NETWORK=yes`, `PXE_ADDRESS_CIDR`, `PXE_GATEWAY` et `PXE_DNS`,
+Mode proxy seulement. Avec `PXE_MANAGE_NETWORK=yes`, `PXE_ADDRESS_CIDR`, `PXE_GATEWAY` et `PXE_DNS`,
 BITS écrit une configuration Netplan statique et l'applique par `netplan try`,
 avec retour automatique.
 

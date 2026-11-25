@@ -1,0 +1,20 @@
+[Unit]
+Description=BITS : réseau PXE du mode passerelle (adresse, routage, NAT, garde DHCP)
+# Sans effet en mode proxy (retire seulement ce qu'une passerelle aurait
+# laissé). Avant bits-dnsmasq, qui écoute sur l'adresse posée ici, et sans
+# attendre network-online : le réseau PXE doit répondre même si le Wi-Fi de
+# l'amont tarde ou manque.
+After=network-pre.target nftables.service
+Before=bits-dnsmasq.service network-online.target
+ConditionPathExists=/etc/bits-pxe-server/pxe.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Appelé directement et non par bitsctl : la configuration du paquet doit
+# être désignée, sinon le script cherche celle du dépôt source.
+Environment=PXE_CONFIG_FILE=/etc/bits-pxe-server/pxe.env PXE_MEDIA_FILE=/etc/bits-pxe-server/media.conf
+ExecStart=/usr/share/bits-pxe-server/scripts/bits-passerelle.sh
+
+[Install]
+WantedBy=multi-user.target

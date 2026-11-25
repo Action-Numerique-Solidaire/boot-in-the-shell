@@ -4,10 +4,11 @@ Une clé USB qui transforme n'importe quel PC en serveur PXE Boot in the Shell.
 Pour s'en servir, pas à pas : [GUIDE-INSTALLATION.md](../GUIDE-INSTALLATION.md).
 
 L'ISO est le `mini.iso` officiel de Debian 13 (installation par le réseau)
-avec un preseed et les firmwares des cartes réseau filaires courantes
-(~79 Mo). Sans ces firmwares, une carte Realtek ou Broadcom qui en charge
-un au démarrage n'est pas vue, et l'installation échoue dès la détection du
-réseau : constaté sur une machine réelle. Elle n'embarque aucun paquet : tout vient du réseau
+avec un preseed et les firmwares des cartes réseau filaires et Wi-Fi
+courantes (~150 Mo : Realtek, Broadcom, Intel, Atheros, MediaTek, Marvell).
+Sans ces firmwares, une carte qui en charge un au démarrage n'est pas vue, et
+l'installation échoue dès la détection du réseau : constaté sur une machine
+réelle (Realtek RTL8168H). Elle n'embarque aucun paquet : tout vient du réseau
 pendant l'installation, et le serveur se met ensuite à jour seul.
 
 ## Ce que fait la clé
@@ -17,8 +18,15 @@ pendant l'installation, et le serveur se met ensuite à jour seul.
    - *Installation Debian manuelle* (sans BITS, sans effacement automatique) ;
    - *Démarrer sur le disque local*.
 2. L'entrée BITS installe Debian 13 minimal **sur le disque interne, entièrement
-   effacé, sans question** : le premier disque qui n'est ni USB ni amovible.
-   La clé n'est jamais choisie, même si le firmware la présente en premier.
+   effacé** : le premier disque qui n'est ni USB ni amovible. La clé n'est
+   jamais choisie, même si le firmware la présente en premier. Seules les
+   questions du réseau sont posées (`priority=high`) : la carte, s'il y en a
+   plusieurs, et en Wi-Fi le réseau et son mot de passe.
+   - installation en **Wi-Fi** avec une carte Ethernet présente : le serveur
+     sera la **passerelle** du réseau PXE 192.168.42.0/24 sur cette carte
+     (`preseed/mode-reseau.sh` écrit
+     `/etc/bits-pxe-server/pxe.env.d/10-installation.env`) ;
+   - installation par câble : mode **proxy**, comme avant.
 3. En fin d'installation :
    - dépôt apt de BITS ajouté, `bits-pxe-server` et `bits-web` installés ;
    - SSH ouvert à **root, mot de passe `admin`** ;
@@ -79,7 +87,7 @@ sudo dd if=bits-amorcage.iso of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
 `dd` écrase la cible sans confirmation : vérifier `/dev/sdX` d'abord. Toute
-clé de 128 Mo ou plus convient.
+clé de 256 Mo ou plus convient.
 
 ## Éprouver
 
@@ -91,6 +99,11 @@ sudo tests/e2e-iso.sh /srv/bits-test/bits-amorcage-test.iso uefi bios
 La variante `--test` part seule sur l'entrée BITS après 1 s et ajoute la
 console série : **à ne pas graver**. Voir `tests/README.md`.
 
+Le chemin **Wi-Fi** de l'installateur ne s'éprouve pas en VM : QEMU n'émule
+pas de carte Wi-Fi. Ce qui suit l'installation (mode passerelle du serveur :
+DHCP, NAT, garde DHCP, postes sur internet) est éprouvé par
+`tests/e2e-paquet.sh --passerelle`, avec une carte filaire en amont.
+
 ## Fichiers
 
 | Fichier | Rôle |
@@ -99,3 +112,4 @@ console série : **à ne pas graver**. Voir `tests/README.md`.
 | `preseed/preseed.cfg` | réponses de l'installateur (langue, réseau, root, partitionnement, paquets) |
 | `preseed/choisir-disque.sh` | choix du disque interne à effacer, jamais la clé |
 | `preseed/late.sh` | dans le système installé : dépôt BITS, paquets, SSH, mises à jour automatiques, console |
+| `preseed/mode-reseau.sh` | dans l'installateur : passerelle si l'installation s'est faite en Wi-Fi et qu'une carte Ethernet existe, pays Wi-Fi FR |

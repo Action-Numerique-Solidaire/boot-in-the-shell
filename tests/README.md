@@ -16,13 +16,17 @@ tests/depot-apt.sh out/apt
 # 3. de bout en bout : vrai Debian 13, publication par l'interface web,
 #    clients PXE BIOS et UEFI qui démarrent Killbit
 sudo tests/e2e-paquet.sh out/debs/bits-pxe-server_*.deb out/debs/bits-web_*.deb [killbit-live.iso]
+
+# 4. idem en mode passerelle : le serveur est le routeur du réseau PXE
+sudo tests/e2e-paquet.sh --passerelle out/debs/bits-pxe-server_*.deb out/debs/bits-web_*.deb
 ```
 
 | Test | Ce que ça prouve | Prérequis | Durée mesurée |
 |---|---|---|---|
-| `paquet-deb.sh` | installation par apt ; rien n'est activé ; `bitsctl` ; réseau déduit ; chargeurs iPXE du paquet `ipxe` ; site nginx, service web sous son utilisateur, ce que sudo lui accorde et lui refuse, garde CSRF ; purge | docker | **42 s** |
+| `paquet-deb.sh` | installation par apt ; rien n'est activé ; `bitsctl` ; réseau déduit ; chargeurs iPXE du paquet `ipxe` ; site nginx, service web sous son utilisateur, ce que sudo lui accorde et lui refuse, garde CSRF ; détection d'une nouvelle version ; mode passerelle sur une paire veth (adresse, NAT, garde DHCP face à un vrai dnsmasq, retour au mode proxy) ; purge | docker | **55 s** |
 | `depot-apt.sh` | le dépôt est lu par apt, chaque paquet a un candidat BITS, ses dépendances se résolvent ; signature vérifiée si le dépôt est signé | docker | **12 s** |
 | `e2e-paquet.sh` | Debian 13 réel (image cloud) ; Killbit activé et publié par l'interface web ; clients BIOS et UEFI : menu, choix de Killbit, noyau et initrd en HTTP, racine en NFS ; après redémarrage du serveur, publication rejouée et adresse affichée sur la console | root, libvirt, KVM, `sshpass`, accès sortant | **2 min 42** avec KVM |
+| `e2e-paquet.sh --passerelle` | le même, le serveur ayant une seconde carte sur un pont isolé sans DHCP (le réseau NAT tient lieu du Wi-Fi) : clients BIOS et UEFI servis par le DHCP du serveur ; TFTP limité au réseau PXE ; un poste Debian du réseau PXE obtient 192.168.42.x, résout un nom et atteint internet en HTTPS ; ce poste reste injoignable depuis l'amont, même routé par le serveur ; un autre serveur DHCP sur le réseau PXE fait refuser la publication et arrêter le DHCP de BITS ; après redémarrage, `bits-lan.service` repose l'adresse et la console l'affiche | idem | **5 min 24** avec KVM |
 
 Mesures du 2026-11-22 sur arkantos, KVM, image Killbit locale : serveur prêt
 en 71 à 106 s (dont 48 s d'installation des paquets), publication par

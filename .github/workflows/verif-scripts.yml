@@ -48,6 +48,8 @@ jobs:
                    "05 - bootstrap-iso/build-bootstrap-iso.sh" \
                    "05 - bootstrap-iso/preseed/late.sh" \
                    "05 - bootstrap-iso/preseed/choisir-disque.sh" \
+                   "05 - bootstrap-iso/preseed/mode-reseau.sh" \
+                   "03 - prototype-generic/scripts/sonde-dhcp.py" \
                    "packaging/bits-pxe-server/bitsctl" \
                    "03 - prototype-generic/scripts/install.sh" \
                    "04 - live-iso/overlay/usr/local/sbin/generic-pxe-wizard.sh"; do

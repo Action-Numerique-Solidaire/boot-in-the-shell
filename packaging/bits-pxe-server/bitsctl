@@ -44,12 +44,25 @@ etat_service() {
 
 cmd_status() {
   load_config
-  echo "Serveur PXE : $PXE_IP sur $PXE_INTERFACE ($PXE_SUBNET_CIDR)"
-  echo "Interface web : http://$PXE_IP/"
+  if [[ "$PXE_MODE" == passerelle ]]; then
+    local amont_ip ssid baux=0
+    amont_ip="$(ip -4 -o addr show dev "${PXE_UPLINK_INTERFACE:-lo}" scope global 2>/dev/null | awk '{ print $4; exit }')"
+    ssid="$(iw dev "${PXE_UPLINK_INTERFACE:-lo}" link 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p')"
+    [[ -f "$STATE_DIR/dnsmasq.leases" ]] && baux="$(grep -c . "$STATE_DIR/dnsmasq.leases" || true)"
+    echo "Mode passerelle"
+    echo "  Amont (internet) : ${PXE_UPLINK_INTERFACE:-aucune route par défaut}${amont_ip:+ $amont_ip}${ssid:+, Wi-Fi « $ssid »}"
+    echo "  Réseau PXE       : $PXE_LAN_CIDR sur $PXE_LAN_INTERFACE, DHCP $PXE_DHCP_DEBUT-$PXE_DHCP_FIN, $baux bail(s)"
+    [[ -e /run/bits/dhcp-refuse ]] && echo "  REFUS : un autre serveur DHCP répond sur $PXE_LAN_INTERFACE ($(cat /run/bits/dhcp-refuse))"
+    echo "Interface web : http://$PXE_IP/${amont_ip:+ et http://${amont_ip%/*}/}"
+  else
+    echo "Serveur PXE : $PXE_IP sur $PXE_INTERFACE ($PXE_SUBNET_CIDR)"
+  fi
+  [[ "$PXE_MODE" == passerelle ]] || echo "Interface web : http://$PXE_IP/"
   echo "Données : $PXE_DATA_MOUNT ($(df -h --output=avail "$PXE_DATA_MOUNT" 2>/dev/null | tail -1 | tr -d ' ') libres)"
   echo
   echo "Services :"
   for s in bits-dnsmasq nginx nfs-server bits-sync; do etat_service "$s.service"; done
+  [[ "$PXE_MODE" == passerelle ]] && etat_service bits-lan.service
   echo
   cmd_media_list
   echo
@@ -198,7 +211,7 @@ cmd_apply() {
   # médias prêts (étape 40) ne dit pas que la suite a abouti.
   cp -f "$STATE_DIR/media-prets" "$STATE_DIR/media-publies"
   noter_versions_publiees
-  systemctl enable --quiet bits-sync.service
+  systemctl enable --quiet bits-sync.service bits-lan.service
   if [[ $ecartes -gt 0 ]]; then
     echo "Publié, mais $ecartes média(s) écarté(s) : voir « bitsctl media list ». Journal : $logf" | tee -a "$logf"
     return 3
@@ -220,13 +233,16 @@ noter_versions_publiees() {
 
 cmd_enable() {
   require_root
-  systemctl enable bits-sync.service
+  systemctl enable bits-sync.service bits-lan.service
   echo "La publication aura lieu à chaque démarrage."
 }
 
 cmd_disable() {
   require_root
   systemctl disable --now bits-sync.service bits-dnsmasq.service
+  # Mode passerelle : l'adresse et le NAT restent en place jusqu'au prochain
+  # démarrage ; bits-lan n'est simplement plus lancé.
+  systemctl disable bits-lan.service
   echo "Le serveur ne répond plus aux démarrages PXE. Réactiver : sudo bitsctl apply"
 }
 

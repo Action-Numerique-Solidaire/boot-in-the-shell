@@ -10,8 +10,18 @@ require_command systemctl
 
 dnsmasq_file="$PXE_STATE_DIR/dnsmasq.conf"
 [[ -f "$dnsmasq_file" ]] || die "Configuration dnsmasq absente : $dnsmasq_file (étape 60)."
-grep -Fqx "dhcp-range=${PXE_SUBNET_CIDR%/*},proxy" "$dnsmasq_file" || \
-  die "La plage ProxyDHCP ne correspond pas à $PXE_SUBNET_CIDR."
+if [[ "$PXE_MODE" == passerelle ]]; then
+  grep -Fqx "dhcp-range=$PXE_DHCP_DEBUT,$PXE_DHCP_FIN,$PXE_NETMASK,12h" "$dnsmasq_file" || \
+    die "La plage DHCP ne correspond pas à $PXE_LAN_CIDR."
+  ip -4 -o addr show dev "$PXE_LAN_INTERFACE" | grep -Fq " $PXE_LAN_CIDR " || \
+    die "$PXE_LAN_CIDR absente de $PXE_LAN_INTERFACE (étape 30)."
+  [[ "$(sysctl -n net.ipv4.ip_forward)" == 1 ]] || die "Routage IPv4 désactivé (net.ipv4.ip_forward)."
+  nft list table inet bits >/dev/null 2>&1 || die "Table nftables « inet bits » absente (étape 30)."
+  [[ ! -e /run/bits/dhcp-refuse ]] || die "Un autre serveur DHCP répond sur $PXE_LAN_INTERFACE : $(cat /run/bits/dhcp-refuse)."
+else
+  grep -Fqx "dhcp-range=${PXE_SUBNET_CIDR%/*},proxy" "$dnsmasq_file" || \
+    die "La plage ProxyDHCP ne correspond pas à $PXE_SUBNET_CIDR."
+fi
 
 if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
   die "UFW est actif. Ouvrir explicitement les flux PXE/NFS/Samba nécessaires avant l'activation."
@@ -67,4 +77,7 @@ while IFS='|' read -r _ id type _ _ _ label; do
   esac
 done < <(ready_media)
 
+if [[ "$PXE_MODE" == passerelle ]]; then
+  echo "Passerelle active et contrôlée : réseau PXE $PXE_LAN_CIDR sur $PXE_LAN_INTERFACE, sortie par ${PXE_UPLINK_INTERFACE:-<aucune route par défaut>}."
+fi
 echo "Serveur PXE actif et contrôlé : $PXE_IP sur $PXE_INTERFACE ($PXE_SUBNET_CIDR)."
