@@ -225,6 +225,10 @@ EOF
   verifier "système sur le disque interne, pas sur la clé" \
     "${SSH[@]}" 'findmnt -no SOURCE / | grep -q "^/dev/vda"'
   verifier "nom d'hôte bits" "${SSH[@]}" '[ "$(hostname)" = bits ]'
+  # Installés depuis la clé : sans eux, une carte Wi-Fi USB (amont du mode
+  # passerelle) ne revient pas au redémarrage.
+  verifier "firmwares de la clé installés (Realtek, Wi-Fi Intel)" \
+    "${SSH[@]}" 'dpkg -s firmware-realtek firmware-iwlwifi >/dev/null 2>&1 && [ -f /usr/lib/firmware/rtlwifi/rtl8188fufw.bin ]'
   verifier "paquets bits-pxe-server et bits-web installés" \
     "${SSH[@]}" 'dpkg-query -W -f="\${Status}\n" bits-pxe-server bits-web | grep -c "install ok installed" | grep -qx 2'
   verifier "dépôt BITS dans sources.list.d" \

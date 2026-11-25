@@ -10,6 +10,16 @@ set -x
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Firmwares de la clé (réseau filaire et Wi-Fi), copiés par late_command.
+# Ceux des cartes Wi-Fi USB sont chargés directement par l'installateur, qui
+# ne les installe donc pas lui-même dans le système : sans eux, le Wi-Fi de
+# l'amont ne reviendrait pas au redémarrage. Installés depuis la clé, sans
+# réseau ; mis à jour ensuite par apt (non-free-firmware).
+if ls /root/bits-firmware/*.deb >/dev/null 2>&1; then
+  dpkg -i /root/bits-firmware/*.deb || true
+fi
+rm -rf /root/bits-firmware
+
 # Le dépôt BITS est servi en HTTPS : sans ca-certificates (absent d'un système
 # minimal), apt refuse le certificat de github.com. Installé AVANT de déclarer
 # le dépôt, depuis le miroir Debian.

@@ -53,7 +53,7 @@ case "$CANAL" in
   *)      die "canal inconnu : $CANAL" ;;
 esac
 [[ "$DEPOT" == */ ]] || DEPOT="$DEPOT/"
-for c in curl xorriso cpio gzip xz sha256sum dpkg-deb; do command -v "$c" >/dev/null || die "commande absente : $c"; done
+for c in curl xorriso cpio gzip xz sha256sum dpkg-deb modinfo; do command -v "$c" >/dev/null || die "commande absente : $c"; done
 
 # --- 1. mini.iso de Debian 13, vérifié ---------------------------------------------
 install -d -m 0755 "$CACHE"
@@ -169,9 +169,53 @@ echo "  $(wc -l < "$TRAVAIL/racine/firmware/Contents-firmware") fichiers indexé
 log "Preseed (dépôt : $DEPOT)"
 xorriso -osirrox on -indev "$CACHE/mini.iso" -extract /initrd.gz "$TRAVAIL/initrd.gz" >/dev/null 2>&1
 chmod u+w "$TRAVAIL/initrd.gz"
+
+# --- firmwares des cartes Wi-Fi USB, en fichiers ------------------------------------
+# Un pilote USB comme rtl8xxxu charge son firmware pendant la détection de la
+# clé : s'il manque, la détection échoue et aucune interface n'apparaît.
+# check-missing-firmware installe bien le paquet ensuite, mais il ne connaît
+# alors le périphérique que comme « usb » (aucun pilote rattaché) et ne relance
+# jamais sa détection : constaté avec une clé RTL8188FU (0bda:f179). Les
+# firmwares de tous les pilotes Wi-Fi USB du noyau de l'installateur sont donc
+# posés directement dans /usr/lib/firmware de l'initrd.
+install -d -m 0755 "$TRAVAIL/modules" "$TRAVAIL/debs-x" "$TRAVAIL/racine/usr/lib/firmware"
+(cd "$TRAVAIL/modules" && zcat "$TRAVAIL/initrd.gz" | cpio -idm --quiet 'usr/lib/modules/*' 2>/dev/null) || true
+kver="$(find "$TRAVAIL/modules/usr/lib/modules" -mindepth 1 -maxdepth 1 -printf "%f\n" | head -n 1)"
+[[ -n "$kver" ]] || die "modules du noyau introuvables dans l'initrd"
+modinfo_i() { modinfo -b "$TRAVAIL/modules/usr" -k "$kver" "$@" 2>/dev/null; }
+declare -A pilotes_usb=()
+while read -r ko; do
+  nom="$(basename "$ko")"; nom="${nom%%.ko*}"
+  modinfo_i -F alias "$nom" | grep -q '^usb:' || continue
+  pilotes_usb[$nom]=1
+  # Le firmware est parfois déclaré par un module commun (rtw88_8822b pour
+  # rtw88_8822bu, mt76x02-usb…) : un niveau de dépendances suffit.
+  for dep in $(modinfo_i -F depends "$nom" | tr ',' ' '); do pilotes_usb[$dep]=1; done
+done < <(find "$TRAVAIL/modules/usr/lib/modules/$kver/kernel/drivers/net/wireless" -name '*.ko*')
+motifs=()
+for nom in "${!pilotes_usb[@]}"; do
+  mapfile -t -O "${#motifs[@]}" motifs < <(modinfo_i -F firmware "$nom")
+done
+nb_fw=0
+while read -r fichier deb _; do
+  for motif in "${motifs[@]}"; do
+    # shellcheck disable=SC2053  # motif glob voulu (mediatek/mt7921*…)
+    [[ "$fichier" == $motif ]] || continue
+    if [[ ! -d "$TRAVAIL/debs-x/$deb" ]]; then
+      dpkg-deb -x "$TRAVAIL/racine/firmware/$deb" "$TRAVAIL/debs-x/$deb"
+    fi
+    (cd "$TRAVAIL/debs-x/$deb/usr/lib/firmware" && cp -L --parents "$fichier" "$TRAVAIL/racine/usr/lib/firmware/")
+    nb_fw=$((nb_fw + 1))
+    break
+  done
+done < "$TRAVAIL/racine/firmware/Contents-firmware"
+[[ -f "$TRAVAIL/racine/usr/lib/firmware/rtlwifi/rtl8188fufw.bin" ]] \
+  || die "firmware Wi-Fi USB manquant (rtlwifi/rtl8188fufw.bin)"
+echo "  Wi-Fi USB : ${#pilotes_usb[@]} pilotes, $nb_fw firmwares posés en fichiers ($(du -sh "$TRAVAIL/racine/usr/lib/firmware" | cut -f1))"
+
 # Le noyau accepte plusieurs archives cpio compressées mises bout à bout :
 # l'initrd d'origine reste intact, /bits y est simplement ajouté.
-(cd "$TRAVAIL/racine" && find preseed.cfg bits firmware -print | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet) \
+(cd "$TRAVAIL/racine" && find preseed.cfg bits firmware usr -print | LC_ALL=C sort | cpio -o -H newc -R 0:0 --quiet) \
   | gzip -9 -n >> "$TRAVAIL/initrd.gz"
 
 # --- 3. menus d'amorçage ---------------------------------------------------------------

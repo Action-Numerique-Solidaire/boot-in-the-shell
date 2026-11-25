@@ -33,7 +33,7 @@ dont la box distribue les adresses ; il n'ajoute que le démarrage PXE.
 ### 1.1 Récupérer l'image
 
 Sur la page des releases du projet, prendre la plus récente qui contient
-`bits-amorcage.iso` (~150 Mo), avec son fichier `SHA256SUMS` :
+`bits-amorcage.iso` (~170 Mo), avec son fichier `SHA256SUMS` :
 
 <https://github.com/Action-Numerique-Solidaire/boot-in-the-shell/releases>
 

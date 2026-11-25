@@ -5,10 +5,19 @@ Pour s'en servir, pas à pas : [GUIDE-INSTALLATION.md](../GUIDE-INSTALLATION.md)
 
 L'ISO est le `mini.iso` officiel de Debian 13 (installation par le réseau)
 avec un preseed et les firmwares des cartes réseau filaires et Wi-Fi
-courantes (~150 Mo : Realtek, Broadcom, Intel, Atheros, MediaTek, Marvell).
+courantes (~170 Mo : Realtek, Broadcom, Intel, Atheros, MediaTek, Marvell).
 Sans ces firmwares, une carte qui en charge un au démarrage n'est pas vue, et
 l'installation échoue dès la détection du réseau : constaté sur une machine
-réelle (Realtek RTL8168H). Elle n'embarque aucun paquet : tout vient du réseau
+réelle (Realtek RTL8168H).
+
+Les paquets de firmware sont dans `/firmware` de l'initrd, avec leur index
+`Contents-firmware`, et l'installateur y prend ce qui manque. Les firmwares
+des **cartes Wi-Fi USB** sont en plus posés en fichiers dans
+`/usr/lib/firmware` : leur pilote charge le firmware dès la détection de la
+clé, et l'installateur ne sait pas relancer cette détection après coup
+(constaté avec une clé RTL8188FU `0bda:f179` : « No network interfaces
+detected »). Tous les paquets de firmware de la clé sont installés dans le
+système, pour que le Wi-Fi revienne au redémarrage. Elle n'embarque aucun paquet : tout vient du réseau
 pendant l'installation, et le serveur se met ensuite à jour seul.
 
 ## Ce que fait la clé
