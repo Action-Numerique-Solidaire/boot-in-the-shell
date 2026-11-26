@@ -58,6 +58,12 @@
                     margin-top: 6px; font-size: 13px; }
   .media .actions button { padding: 4px 10px; font-size: 13px; }
   .media .actions a { color: var(--accent); }
+  .secours { grid-column: 1 / -1; display: grid; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--discret); }
+  .secours label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .secours select, .secours input { font: inherit; color: var(--texte); background: var(--carte);
+    border: 1px solid var(--bord); border-radius: 6px; padding: 4px 8px; }
+  .secours input { width: 100%; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .secours a { color: var(--accent); }
   .pastille { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
               background: var(--neutre-fond); color: var(--discret); }
   .pastille.publie { background: var(--ok-fond); color: var(--ok); }
@@ -117,7 +123,10 @@
     Le menu n'a pas de choix par défaut : un poste démarré sur le réseau attend qu'on choisisse.<br>
     Pour une image téléchargée, le serveur vérifie s'il en existe une version plus récente
     (Killbit en publie une à chaque construction) : « Mettre à jour » la télécharge, la vérifie et,
-    si l'image est servie, la publie aussitôt.</p>
+    si l'image est servie, la publie aussitôt.<br>
+    Windows : Microsoft ne publie que des liens valables 24 h. Le serveur en demande un au moment du
+    téléchargement ; si Microsoft refuse, choisir « Lien collé (secours) » et coller un lien obtenu
+    dans un navigateur. L'ISO est vérifiée avec l'empreinte publiée par Microsoft dans les deux cas.</p>
 </main>
 
 <script>
@@ -127,6 +136,9 @@ const ENTETES = { "Content-Type": "application/json", "X-BITS-Requete": "1" };
 let dernierEtat = null, journalPos = 0, journalNom = null, journalTexte = "";
 // Dernière version disponible en amont, par image téléchargée : { id: réponse de /version }.
 const versions = {}, versionsEnCours = new Set();
+// Images Microsoft : source du lien choisie et lien collé, par image. Gardés
+// ici parce que la liste est reconstruite à chaque rafraîchissement.
+const secours = {};
 
 function octets(n) {
   if (n == null) return "";
@@ -146,6 +158,10 @@ function rendreMedias(etat) {
   const enCours = etat.publication.en_cours;
   const op = etat.publication.operation;
   const conteneur = $("medias");
+  // Saisie en cours dans un champ (lien collé) : on ne reconstruit pas la
+  // liste sous les doigts de l'utilisateur.
+  const actif = document.activeElement;
+  if (actif && conteneur.contains(actif) && (actif.tagName === "INPUT" || actif.tagName === "SELECT") && actif.type !== "checkbox") return;
   conteneur.replaceChildren();
   for (const m of etat.medias) {
     const carte = document.createElement("article");
@@ -222,8 +238,55 @@ function rendreMedias(etat) {
       actions.append(bouton);
     }
     if (actions.childElementCount) carte.append(actions);
+    if (m.microsoft && m.disponible) carte.append(blocSecours(m));
     conteneur.append(carte);
   }
+}
+
+// Image Microsoft : le lien (valable 24 h) est demandé à Microsoft au moment
+// du téléchargement. Si Microsoft refuse, on colle un lien obtenu dans un
+// navigateur ; les boutons « Télécharger » l'utilisent alors.
+function blocSecours(m) {
+  const s = secours[m.id] || (secours[m.id] = { mode: "auto", lien: "", empreinte: "" });
+  const bloc = document.createElement("div");
+  bloc.className = "secours";
+  const choix = document.createElement("label");
+  choix.append("Source du lien de téléchargement :");
+  const sel = document.createElement("select");
+  for (const [v, t] of [["auto", "Automatique (demandé à Microsoft)"], ["colle", "Lien collé (secours)"]]) {
+    const o = document.createElement("option"); o.value = v; o.textContent = t; o.selected = s.mode === v; sel.append(o);
+  }
+  sel.addEventListener("change", () => { s.mode = sel.value; sel.blur(); rendreMedias(dernierEtat); });
+  choix.append(sel);
+  bloc.append(choix);
+  if (s.mode === "colle") {
+    const aide = document.createElement("div");
+    const page = document.createElement("a");
+    page.href = m.page; page.target = "_blank"; page.rel = "noopener noreferrer";
+    page.textContent = "page de téléchargement de Microsoft";
+    aide.append("Ouvrir la ", page, ", choisir l'édition, la langue « Français », puis copier le lien « 64-bit Download » " +
+                "(valable 24 h) et le coller ici. L'empreinte est lue dans la même page ; la saisir ne sert que si le " +
+                "serveur ne peut pas la lire.");
+    const lien = document.createElement("input");
+    lien.type = "url"; lien.placeholder = "https://software.download.prss.microsoft.com/…"; lien.value = s.lien;
+    lien.setAttribute("aria-label", "Lien de téléchargement Microsoft pour " + m.libelle);
+    lien.addEventListener("input", () => { s.lien = lien.value.trim(); });
+    const sha = document.createElement("input");
+    sha.placeholder = "Empreinte SHA-256 (facultative)"; sha.value = s.empreinte;
+    sha.setAttribute("aria-label", "Empreinte SHA-256 de l'ISO (facultative)");
+    sha.addEventListener("input", () => { s.empreinte = sha.value.trim(); });
+    bloc.append(aide, lien, sha);
+    // Téléchargé et à jour : aucun bouton ne s'affiche plus haut, on en offre un ici.
+    const v = versions[m.id];
+    if (m.telecharge != null && !(v && v.a_jour === false)) {
+      const b = document.createElement("button");
+      b.textContent = "Retélécharger avec ce lien";
+      b.disabled = dernierEtat.publication.en_cours;
+      b.addEventListener("click", () => telecharger(m.id, b, m.etat === "publié"));
+      const ligne = document.createElement("div"); ligne.append(b); bloc.append(ligne);
+    }
+  }
+  return bloc;
 }
 
 function pastilleTexte(classe, texte) {
@@ -362,9 +425,16 @@ async function basculer(id, active, caseAc) {
 }
 
 async function telecharger(id, bouton, publier) {
+  const corps = { publier: !!publier };
+  const s = secours[id];
+  if (s && s.mode === "colle") {
+    if (!s.lien) { $("erreur").textContent = "Coller d'abord le lien de téléchargement Microsoft."; return; }
+    corps.lien = s.lien;
+    if (s.empreinte) corps.empreinte = s.empreinte;
+  }
   bouton.disabled = true;
   try {
-    await poster("/api/media/" + encodeURIComponent(id) + "/telecharger", { publier: !!publier });
+    await poster("/api/media/" + encodeURIComponent(id) + "/telecharger", corps);
     journalPos = 0; journalTexte = ""; journalNom = null;
     $("volet-journal").open = true;
     $("erreur").textContent = "";

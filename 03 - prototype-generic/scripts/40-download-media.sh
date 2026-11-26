@@ -33,6 +33,12 @@ failed=()
 
 expected_sha() {
   local sha="$1" url="$2" sums_url remote_name
+  # msdl:<langue> : tableau des empreintes de la page de Microsoft (url =
+  # msdl:<page>), lu sans appeler l'API.
+  if [[ "$sha" == msdl:* ]]; then
+    python3 -I "$(dirname "$0")/lien-microsoft.py" "${url#msdl:}" "${sha#msdl:}" --empreinte-seulement
+    return
+  fi
   if [[ "$sha" != sha256sums:* ]]; then
     printf '%s' "${sha,,}"
     return
@@ -64,23 +70,35 @@ while IFS='|' read -r enabled id _ filename url sha label; do
   else
     # Image non activée : 00-validate-config.sh ne l'a pas contrôlée.
     [[ "$filename" != */* && -n "$filename" ]] || die "Nom de fichier invalide pour $id"
-    [[ "$url" =~ ^(https://|file:///) && "$url" != *REPLACE_* ]] || die "URL à renseigner pour $id."
+    [[ "$url" =~ ^(https://|file:///|msdl:https://|msdl:file:///) && "$url" != *REPLACE_* ]] || die "URL à renseigner pour $id."
   fi
   target="$download_dir/$filename"
   log "$label"
+  # Lien collé dans l'interface web pour une image Microsoft : lu et effacé
+  # d'emblée, pour ne jamais resservir un lien expiré.
+  lien_colle="" sha_colle=""
+  if [[ "$url" == msdl:* && -f "$PXE_STATE_DIR/lien-$id" ]]; then
+    read -r lien_colle sha_colle < "$PXE_STATE_DIR/lien-$id" || true
+    rm -f "$PXE_STATE_DIR/lien-$id"
+  fi
 
   # Empreinte attendue. Publiée à côté de l'image (sha256sums:) : si elle est
   # injoignable, on garde la copie locale déjà vérifiée plutôt que d'écarter
   # le média.
   if ! expected="$(expected_sha "$sha" "$url")" || [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
-    if [[ -f "$target" && -f "$target.sha256" ]]; then
+    if [[ "${sha_colle,,}" =~ ^[0-9a-f]{64}$ ]]; then
+      # Page de Microsoft illisible : l'empreinte saisie avec le lien collé
+      # (copiée de cette même page dans un navigateur) en tient lieu.
+      expected="${sha_colle,,}"
+      echo "AVERTISSEMENT : tableau des empreintes de Microsoft illisible, empreinte saisie utilisée."
+    elif [[ -f "$target" && -f "$target.sha256" ]]; then
       echo "AVERTISSEMENT : empreinte publiée injoignable, copie locale conservée."
       ready+=("$id")
     else
       echo "ÉCHEC : empreinte introuvable pour $filename (${sha#sha256sums:})."
       failed+=("$id")
     fi
-    continue
+    [[ "$expected" =~ ^[0-9a-f]{64}$ && -n "$sha_colle" ]] || continue
   fi
 
   # Copie locale à jour ? Une image publiée sous un nom fixe (Killbit,
@@ -94,6 +112,32 @@ while IFS='|' read -r enabled id _ filename url sha label; do
       continue
     fi
     echo "Nouvelle version ou copie altérée : $filename est retéléchargé."
+  fi
+
+  # Image Microsoft : pas d'adresse fixe, le lien (valable 24 h) est demandé
+  # maintenant. Un lien collé dans l'interface web (secours, si Microsoft
+  # refuse l'appel automatique) passe avant, et ne sert qu'une fois.
+  if [[ "$url" == msdl:* ]]; then
+    if [[ -n "$lien_colle" ]]; then
+      url="$lien_colle"
+      echo "Lien collé dans l'interface web : ${url%%\?*}"
+      if [[ -n "${sha_colle:-}" && "${sha_colle,,}" != "$expected" ]]; then
+        echo "AVERTISSEMENT : l'empreinte saisie diffère de celle de la page Microsoft ; celle de la page est vérifiée."
+      fi
+    else
+      echo "Demande du lien de téléchargement à Microsoft…"
+      if ! reponse="$(python3 -I "$(dirname "$0")/lien-microsoft.py" "${url#msdl:}" "${sha#msdl:}")"; then
+        echo "ÉCHEC : Microsoft n'a pas fourni de lien. Secours : interface web, « Lien collé »."
+        failed+=("$id")
+        continue
+      fi
+      url="$(sed -n 2p <<< "$reponse")"
+      echo "Lien obtenu : ${url%%\?*} (valable 24 h)"
+    fi
+    # Le lien change à chaque fois, pas le contenu : un .part de la même
+    # version (même empreinte attendue) est repris, un autre est jeté.
+    if [[ "$(cat "$target.part.attendu" 2>/dev/null)" != "$expected" ]]; then rm -f "$target.part"; fi
+    printf '%s' "$expected" > "$target.part.attendu"
   fi
 
   # Téléchargement dans .part, vérifié AVANT de prendre la place de la copie
@@ -110,6 +154,7 @@ while IFS='|' read -r enabled id _ filename url sha label; do
     continue
   fi
   mv -f "$target.part" "$target"
+  rm -f "$target.part.attendu"
   printf '%s' "$expected" > "$target.sha256"
   echo "Téléchargé et vérifié : $filename"
   ready+=("$id")

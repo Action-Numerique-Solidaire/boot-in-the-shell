@@ -20,6 +20,14 @@
 # releases/latest/download/ : la dernière version publiée (v0.1.0…), que
 # GitHub désigne par redirection, et non la pré-release « latest » reconstruite
 # à chaque commit.
+#
+# Windows : Microsoft ne publie aucune adresse fixe pour ses ISO, seulement
+# des liens valables 24 h fabriqués par sa page de téléchargement.
+# « msdl:<page> » en URL et « msdl:<langue> » en empreinte : au moment du
+# téléchargement, le serveur demande un lien à Microsoft comme le ferait un
+# navigateur, et vérifie l'ISO avec l'empreinte du tableau de cette page
+# (ligne « <langue> 64-bit »). Si Microsoft refuse l'appel, l'interface web
+# permet de coller un lien obtenu dans un navigateur (« Lien collé »).
 
 no|ubuntu|casper-iso|ubuntu-26.04.1-desktop-amd64.iso|https://releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.iso|sha256sums:https://releases.ubuntu.com/26.04/SHA256SUMS|Ubuntu 26.04.1 LTS
 no|ubuntu-server|casper-iso|ubuntu-26.04.1-live-server-amd64.iso|https://releases.ubuntu.com/26.04/ubuntu-26.04.1-live-server-amd64.iso|sha256sums:https://releases.ubuntu.com/26.04/SHA256SUMS|Ubuntu Server 26.04.1 LTS - installation
@@ -27,4 +35,4 @@ no|lubuntu|casper-iso|lubuntu-26.04.1-desktop-amd64.iso|https://cdimage.ubuntu.c
 no|zorin|casper-iso|Zorin-OS-18.1-Core-64-bit.iso|https://mirrors.edge.kernel.org/zorinos-isos/18/Zorin-OS-18.1-Core-64-bit.iso|44649b97bd307fc4c8529205d098ebbf98575a1e1ba2ee7d7005b697af1721d5|Zorin OS 18.1 Core
 no|killbit|debian-live-iso|killbit-live.iso|https://github.com/Action-Numerique-Solidaire/killbit-image/releases/latest/download/killbit-live.iso|sha256sums:https://github.com/Action-Numerique-Solidaire/killbit-image/releases/latest/download/killbit-live.iso.sha256|Killbit - effacement sécurisé
 no|clonezilla|clonezilla-zip|clonezilla-live-3.3.3-37-amd64.zip|https://downloads.sourceforge.net/project/clonezilla/clonezilla_live_stable/3.3.3-37/clonezilla-live-3.3.3-37-amd64.zip|bbb02b409708cf37774debe00f96c642c59c48ebb216f7349dc2252f705ff10e|Clonezilla Live 3.3.3-37
-no|windows11|windows-iso|Win11.iso|REPLACE_URL|REPLACE_SHA256|Windows 11 - installation
+no|windows11|windows-iso|Win11_x64_fr.iso|msdl:https://www.microsoft.com/fr-fr/software-download/windows11|msdl:Français|Windows 11 - installation

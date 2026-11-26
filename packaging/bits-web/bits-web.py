@@ -12,6 +12,8 @@ les seules que /etc/sudoers.d/bits-web lui accorde :
     bitsctl media enable <id>
     bitsctl media disable <id>
     bitsctl media download --arriere-plan <id>     (télécharger sans publier)
+    bitsctl media download --arriere-plan <id> --lien <url> [<sha256>]
+                                                   (image Microsoft, lien collé)
     systemctl start --no-block bits-sync.service   (publier)
 
 La publication passe par bits-sync.service, la même unité qu'au démarrage,
@@ -46,6 +48,7 @@ DATA_DIR = os.environ.get("BITS_DATA_DIR", "/srv/bits-data")
 LOCK = os.environ.get("BITS_LOCK", "/run/bits-apply.lock")
 BITSCTL = shlex.split(os.environ.get("BITS_BITSCTL", "sudo -n /usr/sbin/bitsctl"))
 APPLIQUER = shlex.split(os.environ.get("BITS_APPLIQUER", "sudo -n /usr/bin/systemctl start --no-block bits-sync.service"))
+SCRIPTS = os.environ.get("BITS_SCRIPTS", "/usr/share/bits-pxe-server/scripts")
 STATIC_DIR = os.environ.get("BITS_WEB_STATIC", os.path.dirname(os.path.abspath(__file__)))
 ADDR = os.environ.get("BITS_WEB_ADDR", "127.0.0.1")
 PORT = int(os.environ.get("BITS_WEB_PORT", "8080"))
@@ -87,6 +90,8 @@ def lire_catalogue():
                 "empreinte": champs[5],
                 "libelle": "|".join(champs[6:]),
                 "active": local and champs[0] == "yes",
+                # Image Microsoft : lien demandé au téléchargement (msdl:<page>).
+                "microsoft": champs[4].startswith("msdl:"),
                 # Une URL à renseigner : l'image ne peut pas être activée telle quelle.
                 "disponible": "REPLACE_" not in champs[4] and "REPLACE_" not in champs[5],
             })
@@ -126,6 +131,7 @@ def versions_publiees():
 # --- dernière version disponible ---------------------------------------------------
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+LIEN_MS_RE = re.compile(r"^https://[A-Za-z0-9.-]+\.microsoft\.com/[!-~]+$")
 CACHE_VERSIONS = 600          # secondes : une vérification par image toutes les 10 min au plus
 _versions = {}                # id -> (instant, résultat)
 _versions_lock = threading.Lock()
@@ -137,6 +143,14 @@ def empreinte_distante(media):
     (sha256sums:<url>) : il change à chaque version. Une empreinte écrite dans
     le catalogue, elle, ne change qu'avec une mise à jour du paquet."""
     source = media["empreinte"]
+    if source.startswith("msdl:"):
+        # Tableau des empreintes de la page de Microsoft, sans appel à l'API.
+        r = subprocess.run(["python3", "-I", os.path.join(SCRIPTS, "lien-microsoft.py"),
+                            media["url"][len("msdl:"):], source[len("msdl:"):], "--empreinte-seulement"],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise ValueError(r.stderr.strip() or f"lien-microsoft.py : code {r.returncode}")
+        return r.stdout.strip().lower(), True, None
     if not source.startswith("sha256sums:"):
         return source.lower(), False, None
     url = source[len("sha256sums:"):]
@@ -348,7 +362,8 @@ def etat():
         else:
             e = "inactif"
         medias.append({
-            **{k: m[k] for k in ("id", "type", "fichier", "libelle", "active", "disponible")},
+            **{k: m[k] for k in ("id", "type", "fichier", "libelle", "active", "disponible", "microsoft")},
+            "page": m["url"][len("msdl:"):] if m["microsoft"] else None,
             "etat": e,
             "telecharge": taille(chemin),
             # Fichier partiel : téléchargement en cours (ou interrompu).
@@ -519,7 +534,17 @@ class Gestionnaire(BaseHTTPRequestHandler):
             with _apply_lock:
                 if publication_en_cours():
                     return self._json(HTTPStatus.CONFLICT, {"erreur": "une opération est déjà en cours"})
-                code, sortie = bitsctl("media", "download", "--arriere-plan", m.group(1))
+                # Secours des images Microsoft : lien obtenu dans un navigateur.
+                # bitsctl le contrôle à nouveau, côté root.
+                lien, sha = corps.get("lien"), corps.get("empreinte") or ""
+                options = []
+                if lien is not None:
+                    if not isinstance(lien, str) or not LIEN_MS_RE.match(lien.strip()):
+                        return self._json(HTTPStatus.BAD_REQUEST, {"erreur": "lien https://….microsoft.com/… attendu"})
+                    if not isinstance(sha, str) or (sha.strip() and not SHA_RE.match(sha.strip().lower())):
+                        return self._json(HTTPStatus.BAD_REQUEST, {"erreur": "empreinte : 64 caractères hexadécimaux attendus"})
+                    options = ["--lien", lien.strip()] + ([sha.strip().lower()] if sha.strip() else [])
+                code, sortie = bitsctl("media", "download", "--arriere-plan", m.group(1), *options)
                 if code != 0:
                     return self._json(HTTPStatus.BAD_REQUEST, {"erreur": sortie})
                 for _ in range(20):

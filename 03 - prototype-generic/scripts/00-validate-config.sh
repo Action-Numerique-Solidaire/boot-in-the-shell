@@ -65,12 +65,16 @@ while IFS='|' read -r enabled id type filename url sha label; do
   [[ "$filename" != */* ]] || die "Nom de fichier invalide pour $id : $filename"
   # https:// pour ce qui vient du réseau, file:// pour un média déjà présent
   # localement. L'empreinte SHA-256 est vérifiée dans les deux cas.
-  [[ "$url" =~ ^(https://|file:///) ]] || die "URL invalide pour $id : attendu https:// ou file:///."
+  # msdl:<page> : image Microsoft sans adresse fixe, lien demandé au
+  # téléchargement (lien-microsoft.py).
+  [[ "$url" =~ ^(https://|file:///|msdl:(https://|file:///)) ]] || die "URL invalide pour $id : attendu https://, file:/// ou msdl:https://."
   [[ "$url" != *REPLACE_* ]] || die "URL à renseigner pour $id."
   # sha256sums:<url> : l'empreinte est lue au téléchargement dans le fichier
   # SHA256SUMS publié avec l'image, pour une image publiée sous un nom fixe
   # qui change de contenu (Killbit, release « latest »).
-  if [[ "$sha" == sha256sums:* ]]; then
+  if [[ "$url" == msdl:* || "$sha" == msdl:* ]]; then
+    [[ "$url" == msdl:* && "$sha" == msdl:?* ]] || die "Image Microsoft $id : url msdl:<page> et empreinte msdl:<langue> vont ensemble."
+  elif [[ "$sha" == sha256sums:* ]]; then
     [[ "${sha#sha256sums:}" =~ ^https:// ]] || die "Empreinte de $id : sha256sums: doit être suivi d'une URL https://."
   else
     [[ "$sha" =~ ^[0-9a-fA-F]{64}$ ]] || die "SHA-256 à renseigner pour $id."

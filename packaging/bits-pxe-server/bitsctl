@@ -13,6 +13,10 @@
 #   bitsctl media download <id>    télécharger et vérifier un média, activé ou
 #                                  non, SANS le publier ; --arriere-plan le
 #                                  lance dans bits-telechargement@<id>.service
+#   bitsctl media download --arriere-plan <id> --lien <url> [<sha256>]
+#                                  image Microsoft (msdl:) : utiliser ce lien,
+#                                  obtenu dans un navigateur, au lieu de le
+#                                  demander à Microsoft (secours)
 #   bitsctl log [-f]               journal de la dernière opération
 #
 # Les journaux sont gardés dans /var/log/bits/ ; derniere.log désigne celui de
@@ -33,7 +37,7 @@ LOCK=/run/bits-apply.lock
 # shellcheck source=/dev/null
 source "$SCRIPTS/lib/common.sh"
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 etat_service() {
   local s="$1" a e
@@ -168,10 +172,23 @@ cmd_download() {
 }
 
 cmd_download_arriere_plan() {
-  local id="$1"
+  local id="$1" lien="${2:-}" sha="${3:-}"
   require_root
   safe_id "$id"
   assurer_ligne "$id"
+  if [[ -n "$lien" ]]; then
+    # Arguments venus de l'interface web : contrôlés ici, côté root. Le lien
+    # ne peut viser que Microsoft, et l'ISO est de toute façon vérifiée par
+    # son empreinte avant d'être servie.
+    awk -F '|' -v id="$id" '$0 !~ /^[[:space:]]*#/ && NF >= 7 && $2 == id { f = ($5 ~ /^msdl:/) } END { exit !f }' "$PXE_MEDIA_FILE" \
+      || die "$id n'est pas une image Microsoft (msdl:) : --lien est refusé."
+    [[ "$lien" =~ ^https://[A-Za-z0-9.-]+\.microsoft\.com/[!-~]+$ ]] \
+      || die "Lien refusé : https://….microsoft.com/… attendu, sans espace."
+    [[ -z "$sha" || "$sha" =~ ^[0-9A-Fa-f]{64}$ ]] || die "Empreinte refusée : 64 caractères hexadécimaux attendus."
+    install -d -m 0755 "$STATE_DIR"
+    printf '%s %s\n' "$lien" "$sha" > "$STATE_DIR/lien-$id"
+    chmod 0600 "$STATE_DIR/lien-$id"
+  fi
   # Dans sa propre unité : le téléchargement va au bout même si l'appelant
   # (l'interface web) redémarre entre-temps.
   systemctl start --no-block "bits-telechargement@$id.service"
@@ -273,6 +290,9 @@ case "${1:-}" in
       download:4)
         [[ "$3" == --arriere-plan ]] || usage
         cmd_download_arriere_plan "$4" ;;
+      download:6|download:7)
+        [[ "$3" == --arriere-plan && "$5" == --lien ]] || usage
+        cmd_download_arriere_plan "$4" "$6" "${7:-}" ;;
       *)                         usage ;;
     esac
     ;;

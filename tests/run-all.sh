@@ -2,6 +2,7 @@
 # Porte d'entrée unique des tests : la même commande pour un contributeur et
 # pour la CI. Chaque élément est éprouvé seul, du plus rapide au plus lent :
 #
+#   0. lien Windows contre un faux site Microsoft           python3         ~1 s
 #   1. paquets installés par apt dans un Debian 13 vierge   docker          ~40 s
 #   2. dépôt apt lu par apt                                 docker          ~12 s
 #   3. ISO d'amorçage : démarrage BIOS et UEFI              qemu            ~20 s
@@ -96,6 +97,9 @@ echo "Construction dans $TRAVAIL"
 SERVEUR=("$TRAVAIL"/debs/bits-pxe-server_*.deb)
 WEB=("$TRAVAIL"/debs/bits-web_*.deb)
 echo "  paquets : $(basename "${SERVEUR[0]}"), $(basename "${WEB[0]}")"
+
+# --- 0 : lien Windows -----------------------------------------------------------------
+run "0. lien Windows (faux site Microsoft)" "$SCRIPT_DIR/lien-microsoft.sh"
 
 # --- 1 et 2 : conteneurs -----------------------------------------------------------------
 docker_ok=""

@@ -96,6 +96,33 @@ grep -E "^no\|essai\|" /etc/bits-pxe-server/media.conf >/dev/null || fail "3 : m
 [[ "$(readlink /var/log/bits/derniere.log)" == telechargement-essai-* ]] || fail "3 : journal du téléchargement"
 echo "OK 3 : media download télécharge et vérifie sans publier"
 
+# Windows (msdl:) : le paquet installe l entrée Microsoft, bitsctl contrôle
+# le lien collé, et 40-download-media.sh le prend avec l empreinte de la page.
+grep -qE "^no\|windows11\|windows-iso\|[^|]*\|msdl:https://www\.microsoft\.com/" /etc/bits-pxe-server/media.conf || fail "3 : entrée Windows 11 sans msdl:"
+if bitsctl media download --arriere-plan essai --lien https://software.download.prss.microsoft.com/a.iso >/dev/null 2>&1; then fail "3 : --lien accepté pour une image non Microsoft"; fi
+if bitsctl media download --arriere-plan windows11 --lien https://exemple.org/a.iso >/dev/null 2>&1; then fail "3 : lien hors de microsoft.com accepté"; fi
+if bitsctl media download --arriere-plan windows11 --lien "https://x.microsoft.com/a b" >/dev/null 2>&1; then fail "3 : lien avec espace accepté"; fi
+[[ ! -e /var/lib/bits/lien-windows11 ]] || fail "3 : un lien refusé a été enregistré"
+# Accepté : enregistré pour 40-download-media.sh (le lancement de l unité
+# échoue ici, sans systemd).
+bitsctl media download --arriere-plan windows11 --lien "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&e=1" >/dev/null 2>&1 || true
+[[ "$(cat /var/lib/bits/lien-windows11 2>/dev/null)" == "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&e=1 " ]] || fail "3 : lien accepté non enregistré"
+[[ "$(stat -c %a /var/lib/bits/lien-windows11)" == 600 ]] || fail "3 : droits du lien enregistré"
+# Téléchargement avec ce lien : une page Microsoft fictive (file://) porte
+# l empreinte, le lien collé (file://, posé à la main : bitsctl n accepte
+# que microsoft.com) porte l image.
+head -c 1048576 /dev/urandom > /tmp/win.iso
+sha=$(sha256sum /tmp/win.iso | cut -d" " -f1)
+install -d /tmp/fr-fr
+echo "<table><tr><td>Fran&ccedil;ais 64-bit</td><td>${sha^^}</td></tr></table>" > /tmp/fr-fr/windows11.html
+sed -i "s#^no|windows11|.*#no|windows11|windows-iso|Win11_x64_fr.iso|msdl:file:///tmp/fr-fr/windows11.html|msdl:Français|Windows 11#" /etc/bits-pxe-server/media.conf
+echo "file:///tmp/win.iso" > /var/lib/bits/lien-windows11
+bitsctl media download windows11 > /tmp/dl.log 2>&1 || { cat /tmp/dl.log; fail "3 : téléchargement par lien collé"; }
+cmp -s /tmp/win.iso /srv/bits-data/downloads/Win11_x64_fr.iso || fail "3 : image Windows non téléchargée"
+[[ ! -e /var/lib/bits/lien-windows11 ]] || fail "3 : lien collé non effacé après usage"
+grep -q "Lien collé" /tmp/dl.log || fail "3 : lien collé non utilisé"
+echo "OK 3 : Windows : lien collé contrôlé, téléchargé et vérifié par l empreinte de la page"
+
 # 4. réseau déduit, sans toucher pxe.env
 export PXE_CONFIG_FILE=/etc/bits-pxe-server/pxe.env PXE_MEDIA_FILE=/etc/bits-pxe-server/media.conf
 out=$(/usr/share/bits-pxe-server/scripts/00-validate-config.sh) || fail "4 : validation"
@@ -140,6 +167,12 @@ if [[ -f /tmp/bits-web.deb ]]; then
   runuser -u bits-web -- sudo -n -l /usr/bin/systemctl start --no-block bits-sync.service >/dev/null || fail "9 : lancement de bits-sync non accordé"
   runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download --arriere-plan killbit >/dev/null || fail "9 : téléchargement non accordé"
   if runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download killbit >/dev/null 2>&1; then fail "9 : téléchargement au premier plan accordé"; fi
+  # Lien Windows collé dans l interface : passé par l API, jusqu à bitsctl.
+  r=$(curl -s -X POST -H "X-BITS-Requete: 1" -H "Content-Type: application/json" -d "{\"lien\": \"https://exemple.org/a.iso\"}" http://127.0.0.1/api/media/windows11/telecharger)
+  [[ "$r" == *microsoft.com* ]] || fail "9 : lien hors de microsoft.com accepté par l API ($r)"
+  curl -s -X POST -H "X-BITS-Requete: 1" -H "Content-Type: application/json" -d "{\"lien\": \"https://software.download.prss.microsoft.com/w.iso?t=1\"}" http://127.0.0.1/api/media/windows11/telecharger >/dev/null
+  [[ "$(cat /var/lib/bits/lien-windows11 2>/dev/null)" == "https://software.download.prss.microsoft.com/w.iso?t=1 " ]] || { cat /tmp/web.log; fail "9 : lien collé non transmis par sudo à bitsctl"; }
+  rm -f /var/lib/bits/lien-windows11
   echo "OK 9 : sudo n accorde que l activation, le téléchargement et le lancement de bits-sync"
   curl -fsS -o /tmp/recup.iso http://127.0.0.1/telechargements/essai.iso || fail "9 : /telechargements/ non servi"
   cmp -s /tmp/essai.iso /tmp/recup.iso || fail "9 : fichier récupéré différent"
