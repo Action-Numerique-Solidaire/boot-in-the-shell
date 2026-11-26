@@ -34,9 +34,9 @@ failed=()
 expected_sha() {
   local sha="$1" url="$2" sums_url remote_name
   # msdl:<langue> : tableau des empreintes de la page de Microsoft (url =
-  # msdl:<page>), lu sans appeler l'API.
+  # msdl:<page>).
   if [[ "$sha" == msdl:* ]]; then
-    python3 -I "$(dirname "$0")/lien-microsoft.py" "${url#msdl:}" "${sha#msdl:}" --empreinte-seulement
+    python3 -I "$(dirname "$0")/empreinte-microsoft.py" "${url#msdl:}" "${sha#msdl:}"
     return
   fi
   if [[ "$sha" != sha256sums:* ]]; then
@@ -114,25 +114,19 @@ while IFS='|' read -r enabled id _ filename url sha label; do
     echo "Nouvelle version ou copie altérée : $filename est retéléchargé."
   fi
 
-  # Image Microsoft : pas d'adresse fixe, le lien (valable 24 h) est demandé
-  # maintenant. Un lien collé dans l'interface web (secours, si Microsoft
-  # refuse l'appel automatique) passe avant, et ne sert qu'une fois.
+  # Image Microsoft : pas d'adresse fixe, et Microsoft refuse de fournir un
+  # lien à un programme. Le lien (valable 24 h) est obtenu dans un navigateur
+  # et collé dans l'interface web ; il ne sert qu'une fois.
   if [[ "$url" == msdl:* ]]; then
-    if [[ -n "$lien_colle" ]]; then
-      url="$lien_colle"
-      echo "Lien collé dans l'interface web : ${url%%\?*}"
-      if [[ -n "${sha_colle:-}" && "${sha_colle,,}" != "$expected" ]]; then
-        echo "AVERTISSEMENT : l'empreinte saisie diffère de celle de la page Microsoft ; celle de la page est vérifiée."
-      fi
-    else
-      echo "Demande du lien de téléchargement à Microsoft…"
-      if ! reponse="$(python3 -I "$(dirname "$0")/lien-microsoft.py" "${url#msdl:}" "${sha#msdl:}")"; then
-        echo "ÉCHEC : Microsoft n'a pas fourni de lien. Secours : interface web, « Lien collé »."
-        failed+=("$id")
-        continue
-      fi
-      url="$(sed -n 2p <<< "$reponse")"
-      echo "Lien obtenu : ${url%%\?*} (valable 24 h)"
+    if [[ -z "$lien_colle" ]]; then
+      echo "ÉCHEC : aucun lien de téléchargement. Coller un lien obtenu sur ${url#msdl:} dans l'interface web (carte $label)."
+      failed+=("$id")
+      continue
+    fi
+    url="$lien_colle"
+    echo "Lien collé dans l'interface web : ${url%%\?*}"
+    if [[ -n "${sha_colle:-}" && "${sha_colle,,}" != "$expected" ]]; then
+      echo "AVERTISSEMENT : l'empreinte saisie diffère de celle de la page Microsoft ; celle de la page est vérifiée."
     fi
     # Le lien change à chaque fois, pas le contenu : un .part de la même
     # version (même empreinte attendue) est repris, un autre est jeté.

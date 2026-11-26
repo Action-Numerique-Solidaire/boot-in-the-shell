@@ -148,7 +148,7 @@ if [ "$1" = "configure" ]; then
   if [ -f /etc/bits-pxe-server/media.conf ]; then
     sed -i 's#/killbit-image/releases/download/latest/#/killbit-image/releases/latest/download/#g' /etc/bits-pxe-server/media.conf
     # Windows 11 n'avait pas d'adresse (REPLACE_URL) : le lien est désormais
-    # demandé à Microsoft au téléchargement (msdl:).
+    # collé dans l'interface web au téléchargement (msdl:).
     sed -i 's#^\([a-z]*\)|windows11|windows-iso|Win11\.iso|REPLACE_URL|REPLACE_SHA256|#\1|windows11|windows-iso|Win11_x64_fr.iso|msdl:https://www.microsoft.com/fr-fr/software-download/windows11|msdl:Français|#' /etc/bits-pxe-server/media.conf
   fi
   if [ -d /run/systemd/system ]; then

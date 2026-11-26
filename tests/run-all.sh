@@ -99,7 +99,7 @@ WEB=("$TRAVAIL"/debs/bits-web_*.deb)
 echo "  paquets : $(basename "${SERVEUR[0]}"), $(basename "${WEB[0]}")"
 
 # --- 0 : lien Windows -----------------------------------------------------------------
-run "0. lien Windows (faux site Microsoft)" "$SCRIPT_DIR/lien-microsoft.sh"
+run "0. empreinte Windows (copie de la page Microsoft)" "$SCRIPT_DIR/empreinte-microsoft.sh"
 
 # --- 1 et 2 : conteneurs -----------------------------------------------------------------
 docker_ok=""

@@ -14,9 +14,10 @@
 #                                  non, SANS le publier ; --arriere-plan le
 #                                  lance dans bits-telechargement@<id>.service
 #   bitsctl media download --arriere-plan <id> --lien <url> [<sha256>]
-#                                  image Microsoft (msdl:) : utiliser ce lien,
-#                                  obtenu dans un navigateur, au lieu de le
-#                                  demander à Microsoft (secours)
+#                                  image Microsoft (msdl:) : seule façon de la
+#                                  télécharger, avec un lien obtenu dans un
+#                                  navigateur (Microsoft refuse d'en fournir
+#                                  un au serveur)
 #   bitsctl log [-f]               journal de la dernière opération
 #
 # Les journaux sont gardés dans /var/log/bits/ ; derniere.log désigne celui de

@@ -116,6 +116,9 @@ sha=$(sha256sum /tmp/win.iso | cut -d" " -f1)
 install -d /tmp/fr-fr
 echo "<table><tr><td>Fran&ccedil;ais 64-bit</td><td>${sha^^}</td></tr></table>" > /tmp/fr-fr/windows11.html
 sed -i "s#^no|windows11|.*#no|windows11|windows-iso|Win11_x64_fr.iso|msdl:file:///tmp/fr-fr/windows11.html|msdl:Français|Windows 11#" /etc/bits-pxe-server/media.conf
+rm -f /var/lib/bits/lien-windows11
+if bitsctl media download windows11 > /tmp/dl.log 2>&1; then fail "3 : téléchargement Windows sans lien collé accepté"; fi
+grep -q "Coller un lien" /tmp/dl.log || { cat /tmp/dl.log; fail "3 : consigne absente sans lien collé"; }
 echo "file:///tmp/win.iso" > /var/lib/bits/lien-windows11
 bitsctl media download windows11 > /tmp/dl.log 2>&1 || { cat /tmp/dl.log; fail "3 : téléchargement par lien collé"; }
 cmp -s /tmp/win.iso /srv/bits-data/downloads/Win11_x64_fr.iso || fail "3 : image Windows non téléchargée"
@@ -168,6 +171,8 @@ if [[ -f /tmp/bits-web.deb ]]; then
   runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download --arriere-plan killbit >/dev/null || fail "9 : téléchargement non accordé"
   if runuser -u bits-web -- sudo -n -l /usr/sbin/bitsctl media download killbit >/dev/null 2>&1; then fail "9 : téléchargement au premier plan accordé"; fi
   # Lien Windows collé dans l interface : passé par l API, jusqu à bitsctl.
+  r=$(curl -s -X POST -H "X-BITS-Requete: 1" -H "Content-Type: application/json" -d "{}" http://127.0.0.1/api/media/windows11/telecharger)
+  [[ "$r" == *lien* ]] || fail "9 : téléchargement Windows sans lien accepté par l API ($r)"
   r=$(curl -s -X POST -H "X-BITS-Requete: 1" -H "Content-Type: application/json" -d "{\"lien\": \"https://exemple.org/a.iso\"}" http://127.0.0.1/api/media/windows11/telecharger)
   [[ "$r" == *microsoft.com* ]] || fail "9 : lien hors de microsoft.com accepté par l API ($r)"
   curl -s -X POST -H "X-BITS-Requete: 1" -H "Content-Type: application/json" -d "{\"lien\": \"https://software.download.prss.microsoft.com/w.iso?t=1\"}" http://127.0.0.1/api/media/windows11/telecharger >/dev/null

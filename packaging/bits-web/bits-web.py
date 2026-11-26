@@ -90,7 +90,7 @@ def lire_catalogue():
                 "empreinte": champs[5],
                 "libelle": "|".join(champs[6:]),
                 "active": local and champs[0] == "yes",
-                # Image Microsoft : lien demandé au téléchargement (msdl:<page>).
+                # Image Microsoft (msdl:<page>) : lien collé au téléchargement.
                 "microsoft": champs[4].startswith("msdl:"),
                 # Une URL à renseigner : l'image ne peut pas être activée telle quelle.
                 "disponible": "REPLACE_" not in champs[4] and "REPLACE_" not in champs[5],
@@ -144,12 +144,12 @@ def empreinte_distante(media):
     le catalogue, elle, ne change qu'avec une mise à jour du paquet."""
     source = media["empreinte"]
     if source.startswith("msdl:"):
-        # Tableau des empreintes de la page de Microsoft, sans appel à l'API.
-        r = subprocess.run(["python3", "-I", os.path.join(SCRIPTS, "lien-microsoft.py"),
-                            media["url"][len("msdl:"):], source[len("msdl:"):], "--empreinte-seulement"],
+        # Tableau des empreintes de la page de Microsoft.
+        r = subprocess.run(["python3", "-I", os.path.join(SCRIPTS, "empreinte-microsoft.py"),
+                            media["url"][len("msdl:"):], source[len("msdl:"):]],
                            capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
-            raise ValueError(r.stderr.strip() or f"lien-microsoft.py : code {r.returncode}")
+            raise ValueError(r.stderr.strip() or f"empreinte-microsoft.py : code {r.returncode}")
         return r.stdout.strip().lower(), True, None
     if not source.startswith("sha256sums:"):
         return source.lower(), False, None
@@ -364,6 +364,7 @@ def etat():
         medias.append({
             **{k: m[k] for k in ("id", "type", "fichier", "libelle", "active", "disponible", "microsoft")},
             "page": m["url"][len("msdl:"):] if m["microsoft"] else None,
+            "langue": m["empreinte"][len("msdl:"):] if m["microsoft"] else None,
             "etat": e,
             "telecharge": taille(chemin),
             # Fichier partiel : téléchargement en cours (ou interrompu).
@@ -534,10 +535,13 @@ class Gestionnaire(BaseHTTPRequestHandler):
             with _apply_lock:
                 if publication_en_cours():
                     return self._json(HTTPStatus.CONFLICT, {"erreur": "une opération est déjà en cours"})
-                # Secours des images Microsoft : lien obtenu dans un navigateur.
-                # bitsctl le contrôle à nouveau, côté root.
+                # Image Microsoft : lien obtenu dans un navigateur, seule source
+                # possible. bitsctl le contrôle à nouveau, côté root.
                 lien, sha = corps.get("lien"), corps.get("empreinte") or ""
                 options = []
+                media = next((x for x in lire_catalogue() if x["id"] == m.group(1)), None)
+                if media and media["microsoft"] and lien is None:
+                    return self._json(HTTPStatus.BAD_REQUEST, {"erreur": "coller d'abord le lien de téléchargement Microsoft"})
                 if lien is not None:
                     if not isinstance(lien, str) or not LIEN_MS_RE.match(lien.strip()):
                         return self._json(HTTPStatus.BAD_REQUEST, {"erreur": "lien https://….microsoft.com/… attendu"})
