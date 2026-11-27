@@ -24,6 +24,7 @@ sudo tests/e2e-paquet.sh --passerelle out/debs/bits-pxe-server_*.deb out/debs/bi
 | Test | Ce que ça prouve | Prérequis | Durée mesurée |
 |---|---|---|---|
 | `empreinte-microsoft.sh` | Windows : empreinte lue dans le tableau de la page de Microsoft (entités HTML, « Français » distinct de « Français canadien »), langue absente refusée — sur une copie locale de la page, **sans appel à microsoft.com** | python3 | **1 s** |
+| `windows-autounattend.sh` | Windows : fichier de réponses de l'installation automatique, UEFI et BIOS — XML bien formé, français, édition Famille, partitionnement, compte local, commandes de moins de 260 caractères, script de nommage ; ne remplace pas une installation réelle | python3 | **1 s** |
 | `paquet-deb.sh` | installation par apt ; rien n'est activé ; `bitsctl` ; lien Windows collé : contrôlé par `bitsctl`, utilisé une fois, ISO vérifiée par l'empreinte de la page ; réseau déduit ; chargeurs iPXE du paquet `ipxe` ; site nginx, service web sous son utilisateur, ce que sudo lui accorde et lui refuse, garde CSRF ; détection d'une nouvelle version ; mode passerelle sur une paire veth (adresse, NAT, garde DHCP face à un vrai dnsmasq, retour au mode proxy) ; purge | docker | **55 s** |
 | `depot-apt.sh` | le dépôt est lu par apt, chaque paquet a un candidat BITS, ses dépendances se résolvent ; signature vérifiée si le dépôt est signé | docker | **12 s** |
 | `e2e-paquet.sh` | Debian 13 réel (image cloud) ; Killbit activé et publié par l'interface web ; clients BIOS et UEFI : menu, choix de Killbit, noyau et initrd en HTTP, racine en NFS ; après redémarrage du serveur, publication rejouée et adresse affichée sur la console | root, libvirt, KVM, `sshpass`, accès sortant | **2 min 42** avec KVM |
@@ -36,7 +37,7 @@ après le choix, client UEFI au menu en 30 s puis 7 s ; après redémarrage du
 serveur, publication rejouée en 7 s. Total : 2 min 42.
 
 `paquet-deb.sh` et `depot-apt.sh` tournent en CI (`paquet.yml`, `depot-apt.yml`),
-`empreinte-microsoft.sh` dans `verif-scripts.yml`.
+`empreinte-microsoft.sh` et `windows-autounattend.sh` dans `verif-scripts.yml`.
 `e2e-paquet.sh` demande KVM : il se lance en local.
 
 ## ISO d'amorçage

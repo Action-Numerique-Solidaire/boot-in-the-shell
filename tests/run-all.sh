@@ -100,6 +100,7 @@ echo "  paquets : $(basename "${SERVEUR[0]}"), $(basename "${WEB[0]}")"
 
 # --- 0 : lien Windows -----------------------------------------------------------------
 run "0. empreinte Windows (copie de la page Microsoft)" "$SCRIPT_DIR/empreinte-microsoft.sh"
+run "0. fichier de réponses Windows (autounattend.xml)" "$SCRIPT_DIR/windows-autounattend.sh"
 
 # --- 1 et 2 : conteneurs -----------------------------------------------------------------
 docker_ok=""

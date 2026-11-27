@@ -46,6 +46,7 @@ jobs:
                    "tests/e2e-iso.sh" \
                    "tests/run-all.sh" \
                    "tests/empreinte-microsoft.sh" \
+                   "tests/windows-autounattend.sh" \
                    "05 - bootstrap-iso/build-bootstrap-iso.sh" \
                    "05 - bootstrap-iso/preseed/late.sh" \
                    "05 - bootstrap-iso/preseed/choisir-disque.sh" \
@@ -76,6 +77,9 @@ jobs:
       # Faux site Microsoft servi en local : aucun appel à microsoft.com.
       - name: Empreinte Windows (empreinte-microsoft.py sur une copie de la page)
         run: tests/empreinte-microsoft.sh
+
+      - name: Installation automatique de Windows (fichier de réponses)
+        run: tests/windows-autounattend.sh
 
       - name: Cohérence du contrat assistant / install.sh
         run: |

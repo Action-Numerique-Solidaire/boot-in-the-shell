@@ -12,6 +12,45 @@ dnsmasq_file="$PXE_STATE_DIR/dnsmasq.conf"
 samba_file=/etc/samba/bits-shares.conf
 # Compte samba des installations Windows (voir l'étape 5).
 SAMBA_USER=bits-install
+# Nom des PC installés par l'entrée automatique : <préfixe>-<numéro de série>.
+WINDOWS_PREFIXE_NOM="${PXE_WINDOWS_PREFIXE_NOM:-ANS}"
+
+# install.bat de WinPE (fins de ligne CRLF : cmd lit mal les étiquettes d'un
+# fichier LF). windows_bat auto : installation automatique.
+windows_bat() {
+  local setup='Z:\setup.exe'
+  {
+    echo '@echo off'
+    echo 'echo BITS : initialisation du reseau...'
+    echo 'wpeinit'
+    if [[ "$1" == auto ]]; then
+      echo 'echo BITS : installation automatique, le disque 0 va etre efface.'
+      for c in TPM SecureBoot CPU RAM Storage; do
+        echo "reg add HKLM\\SYSTEM\\Setup\\LabConfig /v Bypass${c}Check /t REG_DWORD /d 1 /f >nul"
+      done
+      setup='Z:\setup.exe /unattend:%SYSTEMROOT%\System32\autounattend.xml'
+    fi
+    cat <<EOF
+set essai=0
+:montage
+set /a essai+=1
+net use Z: \\\\$PXE_IP\\pxe_$id /user:$SAMBA_USER $SAMBA_USER && goto setup
+if %essai% GEQ 10 goto echec
+echo Partage $PXE_IP injoignable, nouvel essai dans 3 s (%essai%/10)...
+ping -n 4 127.0.0.1 >nul
+goto montage
+:setup
+$setup
+goto fin
+:echec
+echo.
+echo ECHEC : partage \\\\$PXE_IP\\pxe_$id injoignable.
+echo Diagnostic : ipconfig, ping $PXE_IP, net use.
+ipconfig
+:fin
+EOF
+  } | sed 's/$/\r/'
+}
 backup_root=/var/backups/bits
 backup_dir="$backup_root/$(date '+%Y%m%d-%H%M%S')"
 
@@ -181,28 +220,16 @@ for line in "${READY[@]}"; do
 [LaunchApps]
 "%SYSTEMROOT%\System32\cmd.exe", "/k %SYSTEMROOT%\System32\install.bat"
 EOF
-      sed 's/$/\r/' > "$http_dir/install.bat" <<EOF
-@echo off
-echo BITS : initialisation du reseau...
-wpeinit
-set essai=0
-:montage
-set /a essai+=1
-net use Z: \\\\$PXE_IP\\pxe_$id /user:$SAMBA_USER $SAMBA_USER && goto setup
-if %essai% GEQ 10 goto echec
-echo Partage $PXE_IP injoignable, nouvel essai dans 3 s (%essai%/10)...
-ping -n 4 127.0.0.1 >nul
-goto montage
-:setup
-Z:\\setup.exe
-goto fin
-:echec
-echo.
-echo ECHEC : partage \\\\$PXE_IP\\pxe_$id injoignable.
-echo Diagnostic : ipconfig, ping $PXE_IP, net use.
-ipconfig
-:fin
-EOF
+      # install.bat lance l'installation guidée ; install-auto.bat, servi sous
+      # le même nom par l'entrée automatique du menu, lève les contrôles de
+      # matériel (TPM, Secure Boot, processeur, mémoire) et passe le fichier
+      # de réponses (windows-autounattend.sh, une variante UEFI et une BIOS).
+      windows_bat "" > "$http_dir/install.bat"
+      windows_bat auto > "$http_dir/install-auto.bat"
+      for plateforme in efi pcbios; do
+        "$(dirname "$0")/windows-autounattend.sh" "$plateforme" "$WINDOWS_PREFIXE_NOM" \
+          > "$http_dir/autounattend-$plateforme.xml"
+      done
       ;;
   esac
 done
@@ -337,8 +364,13 @@ EOF
     echo "item --gap -- (aucune image publiée : les choisir dans http://$PXE_IP/)"
   fi
   for line in "${READY[@]}"; do
-    IFS='|' read -r _ id _ _ _ _ label <<<"$line"
-    echo "item $id $label"
+    IFS='|' read -r _ id type _ _ _ label <<<"$line"
+    if [[ "$type" == windows-iso ]]; then
+      echo "item $id $label (guidée)"
+      echo "item $id-auto $label automatique - EFFACE LE DISQUE"
+    else
+      echo "item $id $label"
+    fi
   done
   cat <<'EOF'
 item --gap -- ----------------------------------------------------
@@ -384,6 +416,15 @@ initrd http://$PXE_IP/pxe/$id/media/boot/boot.sdi boot.sdi
 initrd http://$PXE_IP/pxe/$id/media/sources/boot.wim boot.wim
 initrd http://$PXE_IP/pxe/$id/winpeshl.ini winpeshl.ini
 initrd http://$PXE_IP/pxe/$id/install.bat install.bat
+boot || goto failed
+:$id-auto
+kernel http://$PXE_IP/pxe/$id/wimboot quiet
+initrd http://$PXE_IP/pxe/$id/media/boot/bcd BCD
+initrd http://$PXE_IP/pxe/$id/media/boot/boot.sdi boot.sdi
+initrd http://$PXE_IP/pxe/$id/media/sources/boot.wim boot.wim
+initrd http://$PXE_IP/pxe/$id/winpeshl.ini winpeshl.ini
+initrd http://$PXE_IP/pxe/$id/install-auto.bat install.bat
+initrd http://$PXE_IP/pxe/$id/autounattend-\${platform}.xml autounattend.xml
 boot || goto failed
 EOF
         ;;
