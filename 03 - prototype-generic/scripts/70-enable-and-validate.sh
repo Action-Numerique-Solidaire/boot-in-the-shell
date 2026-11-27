@@ -37,9 +37,16 @@ if grep -q '^\[pxe_' /etc/samba/bits-shares.conf 2>/dev/null; then
   services+=(smbd)
 fi
 systemctl enable --quiet "${services[@]}"
-# restart et non start : la configuration vient d'être réécrite, et un
-# dnsmasq déjà lancé garderait l'ancienne adresse ou l'ancienne interface.
-systemctl restart "${services[@]}"
+# dnsmasq : restart, la configuration vient d'être réécrite et un dnsmasq
+# déjà lancé garderait l'ancienne adresse ou l'ancienne interface. Les autres
+# relisent leur configuration sans couper les postes en cours : un restart de
+# smbd interrompait une installation Windows qui copiait install.wim, et la
+# publication tourne à chaque action de l'interface web et à chaque mise à
+# jour du paquet. reload-or-restart démarre un service arrêté.
+systemctl restart bits-dnsmasq
+for service in "${services[@]}"; do
+  [[ "$service" == bits-dnsmasq ]] || systemctl reload-or-restart "$service"
+done
 
 for service in "${services[@]}"; do
   systemctl is-active --quiet "$service" || die "Service inactif : $service"

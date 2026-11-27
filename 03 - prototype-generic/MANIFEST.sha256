@@ -10,7 +10,7 @@ af3576898049229176493036b8f151c0e0cdb67781f8a5ea3981cc9fa61c1877  ./scripts/20-p
 5aca209bd116689c57042a9069a5e26105610dcb27ad9530364ea56fb5fb777d  ./scripts/40-download-media.sh
 e276f24d95cf07de77c8d9a52c8f179aa3cd6e1cb4e66e1c3176b39e56f56572  ./scripts/50-build-ipxe.sh
 e9dc44eab06f4f62c99b6c52c9da1bf29786478cf4127fb95b3149a182492a0d  ./scripts/60-publish-media.sh
-3b73b54dc30b4f9b84f2c096bab410bf52a09889a99cb59564639bcb0ea02968  ./scripts/70-enable-and-validate.sh
+11d12ed24e382947f95237742e6ca36065d8b5098b01f0b6b4fe59f337200d3c  ./scripts/70-enable-and-validate.sh
 9e72ba64c6869605dbd538be3f82c80031184f0fcde590c90108e644d80c76f9  ./scripts/attendre-reseau.sh
 9763d26b0c92807d6ab22ddc576d39d92d4ad59e0e9acfcadc2e74e25902bc1c  ./scripts/bits-passerelle.sh
 76ccf1297255a80b763c728abe7619305e0ed7820ac37fdee1e2f3d99e238505  ./scripts/empreinte-microsoft.py
