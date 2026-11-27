@@ -183,7 +183,10 @@ cmd_download_arriere_plan() {
     # son empreinte avant d'être servie.
     awk -F '|' -v id="$id" '$0 !~ /^[[:space:]]*#/ && NF >= 7 && $2 == id { f = ($5 ~ /^msdl:/) } END { exit !f }' "$PXE_MEDIA_FILE" \
       || die "$id n'est pas une image Microsoft (msdl:) : --lien est refusé."
-    [[ "$lien" =~ ^https://[A-Za-z0-9.-]+\.microsoft\.com/[!-~]+$ ]] \
+    # [[:graph:]] et non [!-~] : en locale fr_FR.UTF-8, une plage bornée par
+    # de la ponctuation suit l'ordre de tri de la langue et ne reconnaît plus
+    # rien. bits-web n'a déjà laissé passer que de l'ASCII.
+    [[ "$lien" =~ ^https://[A-Za-z0-9.-]+\.microsoft\.com/[[:graph:]]+$ ]] \
       || die "Lien refusé : https://….microsoft.com/… attendu, sans espace."
     [[ -z "$sha" || "$sha" =~ ^[0-9A-Fa-f]{64}$ ]] || die "Empreinte refusée : 64 caractères hexadécimaux attendus."
     install -d -m 0755 "$STATE_DIR"

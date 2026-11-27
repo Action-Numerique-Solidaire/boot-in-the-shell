@@ -105,6 +105,11 @@ if bitsctl media download --arriere-plan windows11 --lien "https://x.microsoft.c
 [[ ! -e /var/lib/bits/lien-windows11 ]] || fail "3 : un lien refusé a été enregistré"
 # Accepté : enregistré pour 40-download-media.sh (le lancement de l unité
 # échoue ici, sans systemd).
+# Locale du serveur installé (fr_FR.UTF-8) : bitsctl y est lancé par sudo,
+# qui la transmet. Lien au format réel (%2b, %2f, %3d).
+apt-get install -y -qq locales > /dev/null 2>&1 && localedef -i fr_FR -f UTF-8 fr_FR.UTF-8 || fail "3 : locale fr_FR.UTF-8"
+LC_ALL=fr_FR.UTF-8 bitsctl media download --arriere-plan windows11 --lien "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&P1=17&P4=KKN%2bu9i%2fF0%3d%3d" >/dev/null 2>&1 || true
+[[ "$(cat /var/lib/bits/lien-windows11 2>/dev/null)" == "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&P1=17&P4=KKN%2bu9i%2fF0%3d%3d " ]] || fail "3 : lien au format réel refusé en locale fr_FR.UTF-8"
 bitsctl media download --arriere-plan windows11 --lien "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&e=1" >/dev/null 2>&1 || true
 [[ "$(cat /var/lib/bits/lien-windows11 2>/dev/null)" == "https://software.download.prss.microsoft.com/dbazure/Win11.iso?t=x&e=1 " ]] || fail "3 : lien accepté non enregistré"
 [[ "$(stat -c %a /var/lib/bits/lien-windows11)" == 600 ]] || fail "3 : droits du lien enregistré"
