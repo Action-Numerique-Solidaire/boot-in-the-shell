@@ -9,7 +9,7 @@ af3576898049229176493036b8f151c0e0cdb67781f8a5ea3981cc9fa61c1877  ./scripts/20-p
 77bca56091bd69866f86960bf5ec9312c4f0eb7b9530fb7a26ee5db82eff608d  ./scripts/30-configure-network.sh
 5aca209bd116689c57042a9069a5e26105610dcb27ad9530364ea56fb5fb777d  ./scripts/40-download-media.sh
 e276f24d95cf07de77c8d9a52c8f179aa3cd6e1cb4e66e1c3176b39e56f56572  ./scripts/50-build-ipxe.sh
-b91938cb3e154bec2aa407312da5329943991db6084b52abe9f4b74712d4adec  ./scripts/60-publish-media.sh
+29f311d9d5b4afa85e9213eda5a24f2e3842377075b9a2ce39cdb55a231c0d57  ./scripts/60-publish-media.sh
 3b73b54dc30b4f9b84f2c096bab410bf52a09889a99cb59564639bcb0ea02968  ./scripts/70-enable-and-validate.sh
 9e72ba64c6869605dbd538be3f82c80031184f0fcde590c90108e644d80c76f9  ./scripts/attendre-reseau.sh
 9763d26b0c92807d6ab22ddc576d39d92d4ad59e0e9acfcadc2e74e25902bc1c  ./scripts/bits-passerelle.sh

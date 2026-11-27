@@ -10,6 +10,8 @@ menu_file="$PXE_HTTP_ROOT/menu.ipxe"
 exports_file=/etc/exports.d/bits.exports
 dnsmasq_file="$PXE_STATE_DIR/dnsmasq.conf"
 samba_file=/etc/samba/bits-shares.conf
+# Compte samba des installations Windows (voir l'étape 5).
+SAMBA_USER=bits-install
 backup_root=/var/backups/bits
 backup_dir="$backup_root/$(date '+%Y%m%d-%H%M%S')"
 
@@ -171,15 +173,35 @@ for line in "${READY[@]}"; do
       wimboot="$http_dir/wimboot"
       if [[ ! -f "$wimboot" ]]; then curl -fL "$WIMBOOT_URL" -o "$wimboot"; fi
       printf '%s  %s\n' "$WIMBOOT_SHA256" "$wimboot" | sha256sum -c -
-      cat > "$http_dir/install.bat" <<EOF
-@echo off
-wpeinit
-net use Z: \\\\$PXE_IP\\pxe_$id /user:Guest ""
-Z:\\setup.exe
-EOF
-      cat > "$http_dir/winpeshl.ini" <<'EOF'
+      # wimboot dépose ces fichiers dans X:\Windows\System32 (pas à la racine
+      # de X:). Quand le programme lancé par winpeshl.ini se termine, WinPE
+      # redémarre : « cmd /k » garde une invite si install.bat échoue.
+      # Fins de ligne CRLF : cmd lit mal les étiquettes (goto) d'un fichier LF.
+      sed 's/$/\r/' > "$http_dir/winpeshl.ini" <<'EOF'
 [LaunchApps]
-"%SYSTEMROOT%\System32\cmd.exe", "/c X:\install.bat"
+"%SYSTEMROOT%\System32\cmd.exe", "/k %SYSTEMROOT%\System32\install.bat"
+EOF
+      sed 's/$/\r/' > "$http_dir/install.bat" <<EOF
+@echo off
+echo BITS : initialisation du reseau...
+wpeinit
+set essai=0
+:montage
+set /a essai+=1
+net use Z: \\\\$PXE_IP\\pxe_$id /user:$SAMBA_USER $SAMBA_USER && goto setup
+if %essai% GEQ 10 goto echec
+echo Partage $PXE_IP injoignable, nouvel essai dans 3 s (%essai%/10)...
+ping -n 4 127.0.0.1 >nul
+goto montage
+:setup
+Z:\\setup.exe
+goto fin
+:echec
+echo.
+echo ECHEC : partage \\\\$PXE_IP\\pxe_$id injoignable.
+echo Diagnostic : ipconfig, ping $PXE_IP, net use.
+ipconfig
+:fin
 EOF
       ;;
   esac
@@ -198,6 +220,14 @@ systemctl daemon-reload
 # Sans image Windows, samba n'est en général pas installé et /etc/samba
 # n'existe pas : on ne touche à rien, on retire seulement nos partages.
 if [[ "$windows_enabled" == yes ]]; then
+  # Compte dédié plutôt qu'invité : Windows 11 (24H2 et après) refuse les
+  # connexions SMB invitées et exige la signature, impossible sans compte.
+  # Son mot de passe n'a rien de secret (il est servi en HTTP dans
+  # install.bat) : il n'ouvre que les supports d'installation, en lecture
+  # seule, et seulement depuis le réseau PXE.
+  id "$SAMBA_USER" >/dev/null 2>&1 \
+    || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$SAMBA_USER"
+  printf '%s\n%s\n' "$SAMBA_USER" "$SAMBA_USER" | smbpasswd -s -a "$SAMBA_USER" >/dev/null
   : > "$samba_file"
   for line in "${READY[@]}"; do
     IFS='|' read -r _ id type _ <<<"$line"
@@ -206,7 +236,8 @@ if [[ "$windows_enabled" == yes ]]; then
 [pxe_$id]
 path = $PXE_DATA_MOUNT/windows/$id
 read only = yes
-guest ok = yes
+guest ok = no
+valid users = $SAMBA_USER
 browseable = yes
 hosts allow = $PXE_SUBNET_CIDR
 EOF
