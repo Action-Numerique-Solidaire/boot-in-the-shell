@@ -199,7 +199,7 @@ effacé.** Seules les questions du réseau sont posées : la carte, et en Wi-Fi
 le réseau et son mot de passe. Au redémarrage, la console affiche l'adresse de
 l'interface web.
 
-<p align="center"><img src="docs/schemas/installation-cle.svg" alt="Installation par la clé : menu, questions réseau, Debian 13 et paquets BITS, redémarrage"></p>
+<p align="center"><img src="docs/schemas/installation-cle.svg" width="300" alt="Installation par la clé : menu, questions réseau, Debian 13 et paquets BITS, redémarrage"></p>
 
 Pas à pas : [GUIDE-INSTALLATION.md](GUIDE-INSTALLATION.md). Construction de la
 clé : [05 - bootstrap-iso](05%20-%20bootstrap-iso/README.md).
