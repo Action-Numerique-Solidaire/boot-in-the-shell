@@ -1,0 +1,12 @@
+flowchart LR
+    internet(("Internet"))
+    box["Box<br/>DHCP"]
+    switch["Switch"]
+    serveur["Serveur BITS<br/>ProxyDHCP"]
+    p1["Poste 1"]
+    p2["Poste n"]
+
+    internet --- box --- switch
+    switch --- serveur
+    switch --- p1
+    switch --- p2

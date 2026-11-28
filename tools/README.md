@@ -16,6 +16,19 @@ fonctionne aussi, sans ces garde-fous.
 avec le script de BITS (`PXE_IPXE_PREBUILT`) ; le paquet utilise par défaut
 ceux du paquet `ipxe` de la distribution.
 
+## Redessiner les schémas de la documentation
+
+```bash
+tools/generer-schemas.sh
+```
+
+Chaque source Mermaid `docs/schemas/<nom>.mmd` donne `docs/schemas/<nom>.svg`,
+que le README affiche en image. Commiter les deux. Il faut Chrome ou Chromium
+et internet (Mermaid est chargé depuis jsDelivr, version épinglée), pas Node.
+Les schémas sont en images plutôt qu'en blocs Mermaid dans le README : GitHub
+dessine ces blocs dans un cadre de hauteur fixe qui coupe les grands schémas,
+et son application mobile n'en affiche que le code.
+
 ---
 
 ## Ancienne clé « ISO live + médias » (obsolète)

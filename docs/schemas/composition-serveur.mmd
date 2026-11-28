@@ -1,0 +1,31 @@
+flowchart TB
+    nav["Navigateur"] -->|"HTTP, port 80"| nginx
+    ssh["SSH"] --> bitsctl
+
+    subgraph serveur["Serveur BITS (Debian 13)"]
+        nginx["nginx"]
+        web["bits-web<br/>interface web"]
+        bitsctl["bitsctl"]
+        scripts["Publication<br/>étapes 00 à 70"]
+        conf[("media.conf<br/>catalogue")]
+        data[("Images téléchargées<br/>/srv/bits-data")]
+        dnsmasq["dnsmasq<br/>DHCP, TFTP"]
+        nfs["Serveur NFS"]
+        smb["Samba<br/>si Windows est publié"]
+        http["nginx<br/>menu, noyaux : /pxe/"]
+
+        nginx -->|"/"| web
+        web -->|"sudo, commandes limitées"| bitsctl
+        bitsctl --> conf
+        bitsctl --> scripts
+        scripts --> data
+        scripts --> dnsmasq
+        scripts --> http
+        scripts --> nfs
+        scripts --> smb
+    end
+
+    dnsmasq --> poste["Postes PXE"]
+    http --> poste
+    nfs --> poste
+    smb --> poste

@@ -50,27 +50,7 @@ Le serveur reçoit internet par le Wi-Fi et sert un réseau à lui, sur sa carte
 Ethernet reliée à un switch. Les postes de l'atelier ne touchent pas au réseau
 de la box.
 
-```mermaid
-flowchart LR
-    internet(("Internet"))
-    box["Box"]
-    wifi["Routeur Wi-Fi"]
-    subgraph serveur["Serveur BITS"]
-        wlan["Carte Wi-Fi<br/>client DHCP de la box"]
-        eth["Carte Ethernet<br/>192.168.42.1"]
-    end
-    switch["Switch"]
-    p1["Poste 1"]
-    p2["Poste 2"]
-    p3["Poste n"]
-
-    internet --- box --- wifi
-    wifi -. "Wi-Fi" .- wlan
-    eth --- switch
-    switch --- p1
-    switch --- p2
-    switch --- p3
-```
+<p align="center"><img src="docs/schemas/reseau-passerelle.svg" alt="Box, routeur Wi-Fi, serveur BITS relié en Wi-Fi ; sa carte Ethernet 192.168.42.1 dessert un switch et les postes"></p>
 
 Sur le réseau 192.168.42.0/24, le serveur assure :
 
@@ -90,20 +70,7 @@ Le serveur rejoint le réseau existant. La box continue de distribuer les
 adresses ; le serveur répond seulement aux demandes de démarrage réseau
 (ProxyDHCP).
 
-```mermaid
-flowchart LR
-    internet(("Internet"))
-    box["Box<br/>DHCP"]
-    switch["Switch"]
-    serveur["Serveur BITS<br/>ProxyDHCP"]
-    p1["Poste 1"]
-    p2["Poste n"]
-
-    internet --- box --- switch
-    switch --- serveur
-    switch --- p1
-    switch --- p2
-```
+<p align="center"><img src="docs/schemas/reseau-proxy.svg" width="620" alt="Box qui distribue les adresses, switch, serveur BITS en ProxyDHCP et postes sur le même réseau"></p>
 
 ---
 
@@ -113,25 +80,7 @@ Le poste démarre sur le réseau depuis son firmware (touche F12 ou équivalent,
 entrée « PXE », « Network » ou « IPv4 »). Les postes UEFI et BIOS sont pris en
 charge.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant P as Poste
-    participant D as dnsmasq
-    participant H as nginx (HTTP)
-    participant F as NFS ou Samba
-
-    P->>D: DHCP, demande de démarrage réseau
-    D-->>P: adresse et nom du chargeur iPXE
-    P->>D: TFTP, téléchargement du chargeur
-    Note over P: snponly.efi en UEFI<br/>undionly.kpxe en BIOS
-    P->>H: iPXE télécharge le menu
-    H-->>P: menu Boot in the Shell
-    Note over P: l'utilisateur choisit une entrée,<br/>rien ne démarre seul
-    P->>H: noyau et initrd de l'image choisie
-    P->>F: système de fichiers de l'image
-    Note over P: Linux live : NFS<br/>Windows : partage Samba
-```
+<p align="center"><img src="docs/schemas/demarrage-poste.svg" alt="Démarrage d'un poste : DHCP et TFTP auprès de dnsmasq, menu, noyau et initrd en HTTP auprès de nginx, système de fichiers en NFS ou Samba"></p>
 
 Le menu affiché sur le poste :
 
@@ -174,19 +123,7 @@ l'interface web qu'une nouvelle version est disponible.
 
 ## Ajouter une image au menu
 
-```mermaid
-flowchart LR
-    A["Interrupteur activé<br/>dans l'interface web"] --> B["Appliquer au PXE"]
-    B --> C{"Image déjà<br/>téléchargée ?"}
-    C -- non --> D["Téléchargement"]
-    D --> E{"Empreinte<br/>SHA-256 correcte ?"}
-    E -- non --> X["Image écartée,<br/>erreur dans le journal"]
-    E -- oui --> F
-    C -- oui --> F["Extraction du noyau<br/>et de l'initrd"]
-    F --> G["Partage NFS ou Samba"]
-    G --> H["Menu iPXE régénéré"]
-    H --> I["Services rechargés<br/>et contrôlés"]
-```
+<p align="center"><img src="docs/schemas/publication-image.svg" width="460" alt="Publication d'une image : téléchargement si besoin, contrôle de l'empreinte, extraction du noyau, partage, menu régénéré, services rechargés"></p>
 
 - **Télécharger** prépare une image sans la mettre au menu : utile pour les
   images de plusieurs gigaoctets.
@@ -231,19 +168,7 @@ L'installation automatique :
 
 Windows s'active seul si le PC porte une licence d'origine.
 
-```mermaid
-sequenceDiagram
-    participant P as Poste
-    participant S as Serveur BITS
-
-    P->>S: HTTP : wimboot, boot.wim, install.bat, autounattend.xml
-    Note over P: WinPE démarre en mémoire
-    P->>P: contournement TPM et Secure Boot (registre)
-    P->>S: Samba : connexion au partage de l'ISO
-    P->>S: setup.exe lu sur le partage, avec autounattend.xml
-    Note over P: partitionnement, copie de Windows,<br/>redémarrages sur le disque
-    Note over P: nommage du PC, compte Utilisateur,<br/>premier démarrage sans écran
-```
+<p align="center"><img src="docs/schemas/windows-auto.svg" width="720" alt="Installation automatique de Windows : WinPE chargé en HTTP, contournement TPM, setup.exe lu sur le partage Samba avec autounattend.xml"></p>
 
 Le partage Samba est en lecture seule, réservé au réseau des postes, avec un
 compte dédié : Windows 11 refuse les partages ouverts en invité.
@@ -252,38 +177,7 @@ compte dédié : Windows 11 refuse les partages ouverts en invité.
 
 ## Composition du serveur
 
-```mermaid
-flowchart TB
-    nav["Navigateur"] -->|"HTTP, port 80"| nginx
-    ssh["SSH"] --> bitsctl
-
-    subgraph serveur["Serveur BITS (Debian 13)"]
-        nginx["nginx"]
-        web["bits-web<br/>interface web"]
-        bitsctl["bitsctl"]
-        scripts["Publication<br/>étapes 00 à 70"]
-        conf[("media.conf<br/>catalogue")]
-        data[("Images téléchargées<br/>/srv/bits-data")]
-        dnsmasq["dnsmasq<br/>DHCP, TFTP"]
-        nfs["Serveur NFS"]
-        smb["Samba<br/>si Windows est publié"]
-
-        nginx -->|"/"| web
-        web -->|sudo, commandes limitées| bitsctl
-        bitsctl --> conf
-        bitsctl --> scripts
-        scripts --> data
-        scripts --> dnsmasq
-        scripts --> nfs
-        scripts --> smb
-        scripts -->|"menu, noyaux : /pxe/"| nginx
-    end
-
-    poste["Postes PXE"] --> dnsmasq
-    poste --> nginx
-    poste --> nfs
-    poste --> smb
-```
+<p align="center"><img src="docs/schemas/composition-serveur.svg" alt="Composants du serveur : nginx, bits-web, bitsctl, publication, catalogue, images, dnsmasq, NFS, Samba"></p>
 
 | Élément | Rôle |
 |---|---|
@@ -305,13 +199,7 @@ effacé.** Seules les questions du réseau sont posées : la carte, et en Wi-Fi
 le réseau et son mot de passe. Au redémarrage, la console affiche l'adresse de
 l'interface web.
 
-```mermaid
-flowchart LR
-    A["Clé USB<br/>bits-amorcage.iso"] --> B["Menu de la clé :<br/>Installer le serveur BITS"]
-    B --> C["Questions réseau<br/>carte, Wi-Fi, mot de passe"]
-    C --> D["Debian 13 et paquets BITS<br/>environ 6 min"]
-    D --> E["Redémarrage :<br/>adresse de l'interface web<br/>à l'écran"]
-```
+<p align="center"><img src="docs/schemas/installation-cle.svg" alt="Installation par la clé : menu, questions réseau, Debian 13 et paquets BITS, redémarrage"></p>
 
 Pas à pas : [GUIDE-INSTALLATION.md](GUIDE-INSTALLATION.md). Construction de la
 clé : [05 - bootstrap-iso](05%20-%20bootstrap-iso/README.md).
@@ -387,5 +275,8 @@ l'installation de Windows ne s'éprouvent que sur du matériel réel. Détail :
 
 ## Licence
 
-[GNU GPL v3](LICENSE). Projet porté par
+[GNU GPL v3](LICENSE).
+
+Les schémas sont dessinés depuis leurs sources Mermaid,
+[`docs/schemas/*.mmd`](docs/schemas/), par `tools/generer-schemas.sh`. Projet porté par
 [Action Numérique Solidaire](https://github.com/Action-Numerique-Solidaire).

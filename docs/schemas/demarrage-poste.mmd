@@ -1,0 +1,17 @@
+sequenceDiagram
+    autonumber
+    participant P as Poste
+    participant D as dnsmasq
+    participant H as nginx (HTTP)
+    participant F as NFS ou Samba
+
+    P->>D: DHCP, demande de démarrage réseau
+    D-->>P: adresse et nom du chargeur iPXE
+    P->>D: TFTP, téléchargement du chargeur
+    Note over P: snponly.efi en UEFI<br/>undionly.kpxe en BIOS
+    P->>H: iPXE télécharge le menu
+    H-->>P: menu Boot in the Shell
+    Note over P: l'utilisateur choisit une entrée,<br/>rien ne démarre seul
+    P->>H: noyau et initrd de l'image choisie
+    P->>F: système de fichiers de l'image
+    Note over P: Linux live : NFS<br/>Windows : partage Samba

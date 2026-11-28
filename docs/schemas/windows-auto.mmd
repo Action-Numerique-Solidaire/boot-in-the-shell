@@ -1,0 +1,11 @@
+sequenceDiagram
+    participant P as Poste
+    participant S as Serveur BITS
+
+    P->>S: HTTP : wimboot, boot.wim, install.bat, autounattend.xml
+    Note over P: WinPE démarre en mémoire
+    P->>P: contournement TPM et Secure Boot (registre)
+    P->>S: Samba : connexion au partage de l'ISO
+    P->>S: setup.exe lu sur le partage, avec autounattend.xml
+    Note over P: partitionnement, copie de Windows,<br/>redémarrages sur le disque
+    Note over P: nommage du PC, compte Utilisateur,<br/>premier démarrage sans écran

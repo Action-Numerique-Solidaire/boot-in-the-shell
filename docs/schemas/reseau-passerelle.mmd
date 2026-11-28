@@ -1,0 +1,19 @@
+flowchart LR
+    internet(("Internet"))
+    box["Box"]
+    wifi["Routeur Wi-Fi"]
+    subgraph serveur["Serveur BITS"]
+        wlan["Carte Wi-Fi<br/>client DHCP de la box"]
+        eth["Carte Ethernet<br/>192.168.42.1"]
+    end
+    switch["Switch"]
+    p1["Poste 1"]
+    p2["Poste 2"]
+    p3["Poste n"]
+
+    internet --- box --- wifi
+    wifi -. "Wi-Fi" .- wlan
+    eth --- switch
+    switch --- p1
+    switch --- p2
+    switch --- p3

@@ -1,0 +1,11 @@
+flowchart TB
+    A["Interrupteur activé<br/>dans l'interface web"] --> B["Appliquer au PXE"]
+    B --> C{"Image déjà<br/>téléchargée ?"}
+    C -- non --> D["Téléchargement"]
+    D --> E{"Empreinte<br/>SHA-256 correcte ?"}
+    E -- non --> X["Image écartée,<br/>erreur dans le journal"]
+    E -- oui --> F
+    C -- oui --> F["Extraction du noyau<br/>et de l'initrd"]
+    F --> G["Partage NFS ou Samba"]
+    G --> H["Menu iPXE régénéré"]
+    H --> I["Services rechargés<br/>et contrôlés"]
